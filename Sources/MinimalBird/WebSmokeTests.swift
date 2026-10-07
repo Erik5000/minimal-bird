@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2026 Min Twitter contributors
+// Copyright (c) 2026 Minimal Bird contributors
 
 import AppKit
 import WebKit
@@ -91,7 +91,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("background excluded from keyboard and accessibility", "document.querySelector('main').inert && document.querySelector('header').inert")
         try await check("close button is hidden", "getComputedStyle(document.querySelector('#close')).display === 'none'")
         try await check("profile avatar remains visible", "getComputedStyle(document.querySelector('#avatar img')).visibility === 'visible'")
-        try await js("document.querySelector('[data-mt-part=identity]').click()")
+        try await js("document.querySelector('[data-mb-part=identity]').click()")
         try await Task.sleep(for: .milliseconds(50))
         if messages.last?["state"] as? String != "accounts" {
             failures += 1; print("FAIL: profile header opens native account menu")
@@ -100,11 +100,11 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         web.setFrameSize(NSSize(width: 1680, height: 960))
         try await js("document.querySelector('[data-testid=SideNav_AccountSwitcher_Button]').appendChild(document.querySelector('#avatar'));void 0")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("avatar stays in the composer when X moves it outside at wide sizes", "(()=>{const a=document.querySelector('[data-mt-fallback-avatar]'),r=a?.getBoundingClientRect();return a?.src==='https://fixtures.invalid/avatar.png' && r.width===36 && r.height===36 && getComputedStyle(a).visibility==='visible' && document.querySelector('main').inert})()")
+        try await check("avatar stays in the composer when X moves it outside at wide sizes", "(()=>{const a=document.querySelector('[data-mb-fallback-avatar]'),r=a?.getBoundingClientRect();return a?.src==='https://fixtures.invalid/avatar.png' && r.width===36 && r.height===36 && getComputedStyle(a).visibility==='visible' && document.querySelector('main').inert})()")
         web.setFrameSize(NSSize(width: 480, height: 420))
         try await js("document.querySelector('#composer').appendChild(document.querySelector('#avatar'));document.querySelector('#avatar').style.display='none';void 0")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("original avatar returns without duplication after narrowing", "!document.querySelector('[data-mt-fallback-avatar]') && document.querySelector('#avatar').getBoundingClientRect().width===36 && getComputedStyle(document.querySelector('#avatar')).display !== 'none'")
+        try await check("original avatar returns without duplication after narrowing", "!document.querySelector('[data-mb-fallback-avatar]') && document.querySelector('#avatar').getBoundingClientRect().width===36 && getComputedStyle(document.querySelector('#avatar')).display !== 'none'")
         web.setFrameSize(NSSize(width: 760, height: 600))
         try await check("Post stays below the writing area and inside the window", "(()=>{const p=document.querySelector('#post').getBoundingClientRect(),e=document.querySelector('#editor').getBoundingClientRect();return p.top > e.bottom && p.right <= innerWidth && p.bottom <= innerHeight})()")
         try await check("styling preserves the original editor and upload input parents", "document.querySelector('#editor').parentElement.dataset.testid === 'tweetTextarea_0RichTextInputContainer' && document.querySelector('#file').parentElement.dataset.testid === 'toolBar'")
@@ -114,7 +114,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("new media previews remain visible after layout changes", "getComputedStyle(document.querySelector('#preview')).display !== 'none' && document.querySelector('#preview').getBoundingClientRect().height > 0")
         try await js("const next=document.createElement('div');next.id='thread';next.dataset.testid='tweetTextarea_1';next.contentEditable='true';next.textContent='Second post';document.querySelector('#writingHost').appendChild(next);void 0")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("expanded authoring falls back without hiding additional editors", "!document.querySelector('#composer').hasAttribute('data-mt-designed') && getComputedStyle(document.querySelector('#thread')).visibility === 'visible' && document.querySelector('#thread').getBoundingClientRect().height > 0")
+        try await check("expanded authoring falls back without hiding additional editors", "!document.querySelector('#composer').hasAttribute('data-mb-designed') && getComputedStyle(document.querySelector('#thread')).visibility === 'visible' && document.querySelector('#thread').getBoundingClientRect().height > 0")
         try await js("document.querySelector('#thread').remove();document.querySelector('#preview').remove();void 0")
         try await js("const poll=document.createElement('input');poll.id='poll';poll.value='First option';document.querySelector('#writingHost').appendChild(poll);void 0")
         try await Task.sleep(for: .milliseconds(50))
@@ -141,7 +141,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         else { print("PASS: post completion curtain") }
         try await js("document.querySelector('#newPost').addEventListener('click', event => { event.preventDefault(); history.pushState({}, '', '/home?%40modal=%2Fcompose%2Fpost'); document.querySelector('#layers').innerHTML = `<div role='dialog'><div id='warmEditor' data-testid='tweetTextarea_0' contenteditable='true'></div><button data-testid='tweetButton'>Post</button></div>`; }); window.__fixtureMarker = 123")
         try await check("background navigation remains blocked", "!document.querySelector('#newPost').dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true}))")
-        try await check("native new-post action reuses X navigation", "window.__minTwitterOpenComposer() === true")
+        try await check("native new-post action reuses X navigation", "window.__minimalBirdOpenComposer() === true")
         try await Task.sleep(for: .milliseconds(50))
         try await check("warm composer opens without replacing the document", "window.__fixtureMarker === 123 && getComputedStyle(document.querySelector('#warmEditor')).visibility === 'visible'")
         try await check("feed stays hidden during warm open", "getComputedStyle(document.querySelector('#feed')).visibility === 'hidden'")
@@ -153,7 +153,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("late React composer is recognized", "getComputedStyle(document.querySelector('#dynamic')).visibility === 'visible'")
         try await check("late feed insertion stays hidden", "getComputedStyle(document.querySelector('#newfeed')).visibility === 'hidden'")
         try await js("history.pushState({}, '', '/notifications')")
-        try await check("SPA navigation closes curtain synchronously", "!document.querySelector('[data-mt-surface]')")
+        try await check("SPA navigation closes curtain synchronously", "!document.querySelector('[data-mb-surface]')")
 
         await load("<article data-testid='tweet' id='feed'>Feed</article><div role='dialog'><h1>Sign in to X</h1><input name='text' id='username'><button id='google'>Sign in with Google</button><button id='googleLabel' aria-label='Über Google anmelden'></button><button id='next'>Next</button></div>", path: "/i/jf/onboarding/web")
         try await check("username login is visible", "getComputedStyle(document.querySelector('#username')).visibility === 'visible'")
@@ -177,7 +177,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             getSelection().removeAllRanges();getSelection().addRange(range);void 0
             """)
         try await Task.sleep(for: .milliseconds(50))
-        try await js("document.querySelector('[data-mt-part=identity]').focus();window.__minTwitterFocusEditor()")
+        try await js("document.querySelector('[data-mb-part=identity]').focus();window.__minimalBirdFocusEditor()")
         try await check("returning from account menu restores editor and caret", "document.activeElement.id==='editor' && getSelection().anchorOffset===2")
         try await js("document.execCommand('insertText',false,'!')")
         try await check("typing resumes at the saved caret", "document.querySelector('#editor').textContent==='He!llo'")
@@ -185,10 +185,10 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             const choice=document.createElement('input');choice.id='focusChoice';
             document.querySelector('#composer').appendChild(choice);choice.focus();void 0
             """)
-        try await check("restoring focus does not steal a poll input", "window.__minTwitterFocusEditor() && document.activeElement.id==='focusChoice'")
+        try await check("restoring focus does not steal a poll input", "window.__minimalBirdFocusEditor() && document.activeElement.id==='focusChoice'")
         try await js("document.querySelector('#focusChoice').remove();document.querySelector('#editor').textContent='';void 0")
         try await Task.sleep(for: .milliseconds(50))
-        try await js("document.querySelector('[data-mt-part=identity]').focus();document.querySelector('[data-mt-part=writing]').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0}))")
+        try await js("document.querySelector('[data-mb-part=identity]').focus();document.querySelector('[data-mb-part=writing]').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0}))")
         try await check("blank writing space restores editable focus", "document.activeElement.id==='editor'")
         try await js("""
             const unsolicited=document.createElement('div');unsolicited.role='dialog';unsolicited.id='unsolicited';
@@ -211,12 +211,12 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("authoring popup is visible and interactive outside composer", "getComputedStyle(document.querySelector('#authoringPopup')).visibility==='visible' && !document.querySelector('#authoringPopup').closest('[inert]')")
         try await check("popup recognition never reveals tweets or unrelated dialogs", "getComputedStyle(document.querySelector('#badPopup')).visibility==='hidden' && getComputedStyle(document.querySelector('#unsolicited')).visibility==='hidden' && document.querySelector('main').inert")
         try await js("document.querySelector('#popupField').focus()")
-        try await check("native focus restoration leaves authoring popup active", "!window.__minTwitterFocusEditor() && document.activeElement.id==='popupField'")
+        try await check("native focus restoration leaves authoring popup active", "!window.__minimalBirdFocusEditor() && document.activeElement.id==='popupField'")
         try await check("popup close control remains visible", "getComputedStyle(document.querySelector('#closePopup')).display!=='none'")
         try await js("document.querySelector('#popupField').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))")
         try await Task.sleep(for: .milliseconds(50))
         try await check("Escape exits the popup while preserving composer", "!document.querySelector('#authoringPopup') && getComputedStyle(document.querySelector('#editor')).visibility==='visible'")
-        try await check("editor can resume after popup exit", "window.__minTwitterFocusEditor() && document.activeElement.id==='editor'")
+        try await check("editor can resume after popup exit", "window.__minimalBirdFocusEditor() && document.activeElement.id==='editor'")
         try await js("document.querySelector('#popupTrigger').click()")
         try await Task.sleep(for: .milliseconds(50))
         try await js("document.querySelector('#closePopup').click()")
@@ -240,12 +240,12 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("popup escapes transformed and clipped anchors within the window", "(()=>{const r=document.querySelector('#groupPopup').getBoundingClientRect(),p=getComputedStyle(document.querySelector('#popupPortal'));return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight && p.clipPath==='none' && p.overflow==='visible'})()")
         try await js("document.querySelector('#emojiSearch').focus();document.querySelector('#emojiSearch').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("Escape exits a focusable popup group", "!document.querySelector('#groupPopup') && window.__minTwitterFocusEditor()")
+        try await check("Escape exits a focusable popup group", "!document.querySelector('#groupPopup') && window.__minimalBirdFocusEditor()")
         try await js("document.querySelectorAll('#popupTrigger,#unsolicited,#badPopup').forEach(n=>n.remove());void 0")
     }
 
     private func exerciseAuthoring() async throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MinTwitterUpload-" + UUID().uuidString)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MinimalBirdUpload-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let sample = folder.appendingPathComponent("upload-fixture.png")
@@ -309,7 +309,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("attachment pixels decode and the thumbnail has visible geometry", "(()=>{const img=document.querySelector('#uploaded img');return img.naturalWidth===64 && img.naturalHeight===40 && img.getBoundingClientRect().height>0 && getComputedStyle(img).visibility==='visible'})()")
         try await js("document.querySelector('#removeImage').click()")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("image can be removed and compact writing restored", "!document.querySelector('#uploaded') && document.querySelector('#externalFile').files.length===0 && document.querySelector('#composer').hasAttribute('data-mt-designed')")
+        try await check("image can be removed and compact writing restored", "!document.querySelector('#uploaded') && document.querySelector('#externalFile').files.length===0 && document.querySelector('#composer').hasAttribute('data-mb-designed')")
         if messages.last(where: { $0["state"] as? String == "draft" })?["dirty"] as? Bool != false {
             failures += 1; print("FAIL: removing image clears the attachment-only draft")
         } else { print("PASS: removing image clears the attachment-only draft") }
@@ -359,10 +359,10 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await js("document.querySelector('#removePoll').click()")
         try await js("document.querySelector('#editor').textContent='Keep my text';document.querySelector('#pollButton').click()")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("poll exit stays visible even with contenteditable choices", "(()=>{const b=document.querySelector('#removePoll');return b.getBoundingClientRect().height>0 && getComputedStyle(b).visibility==='visible' && !document.querySelector('#composer').hasAttribute('data-mt-designed')})()")
+        try await check("poll exit stays visible even with contenteditable choices", "(()=>{const b=document.querySelector('#removePoll');return b.getBoundingClientRect().height>0 && getComputedStyle(b).visibility==='visible' && !document.querySelector('#composer').hasAttribute('data-mb-designed')})()")
         try await js("document.querySelector('#removePoll').click()")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("removing a poll preserves text and returns to compact writing", "!document.querySelector('#pollForm') && document.querySelector('#editor').textContent==='Keep my text' && document.querySelector('#composer').hasAttribute('data-mt-designed') && getComputedStyle(document.querySelector('#background')).visibility==='hidden'")
+        try await check("removing a poll preserves text and returns to compact writing", "!document.querySelector('#pollForm') && document.querySelector('#editor').textContent==='Keep my text' && document.querySelector('#composer').hasAttribute('data-mb-designed') && getComputedStyle(document.querySelector('#background')).visibility==='hidden'")
         try await js("""
             document.querySelector('#editor').textContent='';
             const photo=document.createElement('div');photo.id='backgroundPhoto';photo.style.width='160px';photo.style.height='100px';
@@ -371,7 +371,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await Task.sleep(for: .milliseconds(50))
         try await js("document.querySelector('#backgroundPhoto').style.backgroundImage=`url(${URL.createObjectURL(new Blob([window.fixtureBytes],{type:'image/png'}))})`;void 0")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("background-image preview without buttons survives a late style change", "(()=>{const p=document.querySelector('#backgroundPhoto');return getComputedStyle(p).backgroundImage!=='none' && p.getBoundingClientRect().height===100 && getComputedStyle(p).visibility==='visible' && !document.querySelector('#composer').hasAttribute('data-mt-designed')})()")
+        try await check("background-image preview without buttons survives a late style change", "(()=>{const p=document.querySelector('#backgroundPhoto');return getComputedStyle(p).backgroundImage!=='none' && p.getBoundingClientRect().height===100 && getComputedStyle(p).visibility==='visible' && !document.querySelector('#composer').hasAttribute('data-mb-designed')})()")
         if messages.last(where: { $0["state"] as? String == "draft" })?["dirty"] as? Bool != true {
             failures += 1; print("FAIL: background-image attachments participate in draft protection")
         } else { print("PASS: background-image attachments participate in draft protection") }

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2026 Min Twitter contributors
+// Copyright (c) 2026 Minimal Bird contributors
 
 import XCTest
 @testable import FocusCore
 
 final class AccountProfilesTests: XCTestCase {
     func testSeparateAccountsPersistAndKeepOriginalSession() throws {
-        let suite = "MinTwitterTests-" + UUID().uuidString
+        let suite = "MinimalBirdTests-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let accounts = AccountProfiles(defaults: defaults)
@@ -26,7 +26,7 @@ final class AccountProfilesTests: XCTestCase {
     }
 
     func testDamagedMetadataFallsBackToOriginalSession() throws {
-        let suite = "MinTwitterTests-" + UUID().uuidString
+        let suite = "MinimalBirdTests-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(Data("invalid".utf8), forKey: "AccountProfiles.v1")

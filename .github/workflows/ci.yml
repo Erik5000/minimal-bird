@@ -11,4 +11,4 @@ jobs:
       - run: swift test --disable-sandbox
       - run: bash -n scripts/*.sh
       - run: ./scripts/build-app.sh --universal
-      - run: '"build/Min Twitter.app/Contents/MacOS/MinTwitter" --self-test'
+      - run: '"build/Minimal Bird.app/Contents/MacOS/MinimalBird" --self-test'

@@ -1,8 +1,10 @@
 # Release review — 0.6.0, 2026-10-07
 
+Rename update (0.7.0): the app is now Minimal Bird, with the bundle identifier `io.github.erik5000.minimalbird`. Saved accounts and sessions from earlier builds do not carry over. Sign in again after the update.
+
 Publication update (0.6.1): the first public source snapshot uses GPL-3.0-only, includes Search/Office Commun inspiration credits, and bundles its license and notices in the app. The About dialog exposes the license. The experimental app ZIP is distributed alongside its exact corresponding source and checksums; it remains ad-hoc signed and not notarized.
 
-Reviewed all application source, account storage and navigation policy, WebKit filtering, window and draft lifecycle, icon generation, tests, CI, and build/install/release scripts. This is a source and integration review of Min Twitter, not a security audit of X's website.
+Reviewed all application source, account storage and navigation policy, WebKit filtering, window and draft lifecycle, icon generation, tests, CI, and build/install/release scripts. This is a source and integration review of Minimal Bird, not a security audit of X's website.
 
 ## Findings addressed
 

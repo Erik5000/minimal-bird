@@ -1,6 +1,6 @@
-# Min Twitter
+# Minimal Bird
 
-<img src="Assets/AppIcon.png" width="96" alt="Min Twitter icon">
+<img src="Assets/AppIcon.png" width="96" alt="Minimal Bird icon">
 
 A small Mac app for writing and posting to X. Your avatar, a composer, and a Post button. Feeds, notifications, engagement, trends, and profile browsing stay hidden.
 
@@ -8,18 +8,18 @@ Uses X's own website in Apple's WebKit. No paid API, API key, backend, analytics
 
 ## Install and use
 
-[Downloads and releases](https://github.com/Erik5000/min-twitter/releases), or build it yourself below. To use a downloaded app, unzip it and move **Min Twitter.app** into **Applications**. The current prebuilt app is an **experimental, ad-hoc-signed build**: it is not Developer ID signed or notarized, and macOS may block it after download. Building from source avoids depending on an unnotarized download. A notarized, straightforward installation is still pending.
+[Downloads and releases](https://github.com/Erik5000/minimal-bird/releases), or build it yourself below. To use a downloaded app, unzip it and move **Minimal Bird.app** into **Applications**. The current prebuilt app is an **experimental, ad-hoc-signed build**: it is not Developer ID signed or notarized, and macOS may block it after download. Building from source avoids depending on an unnotarized download. A notarized, straightforward installation is still pending.
 
 Requires macOS 14 or newer. To build from source, install Xcode or a Swift 6 toolchain, then run:
 
 ```sh
-git clone https://github.com/Erik5000/min-twitter.git
-cd min-twitter
+git clone https://github.com/Erik5000/minimal-bird.git
+cd minimal-bird
 ./scripts/build-app.sh
 ./scripts/install-app.sh
 ```
 
-This creates **Min Twitter.app** in **Applications**. Open it from Spotlight or Finder and drag its Dock icon into a permanent position if desired. For a user-only installation, run `./scripts/install-app.sh "$HOME/Applications"` instead.
+This creates **Minimal Bird.app** in **Applications**. Open it from Spotlight or Finder and drag its Dock icon into a permanent position if desired. For a user-only installation, run `./scripts/install-app.sh "$HOME/Applications"` instead.
 
 Sign in with your X username/email and password and complete any verification X requests. X cookies stay in this app's WebKit store. Google/Apple sign-in, signup, and pop-out windows are unavailable in this version.
 
@@ -66,28 +66,28 @@ This is visual and navigation isolation. X still makes its usual website request
 ```sh
 swift test --disable-sandbox
 ./scripts/build-app.sh
-"build/Min Twitter.app/Contents/MacOS/MinTwitter" --self-test
+"build/Minimal Bird.app/Contents/MacOS/MinimalBird" --self-test
 ```
 
 Unit tests check allowed and blocked URLs, including deceptive hosts, and account metadata persistence. WebKit tests use synthetic pages and a nonpersistent store, plus disposable persistent stores for cookie-isolation checks. They check composer/login visibility, background isolation, text/poll draft detection, resizing across avatar layout changes, the account-menu bridge, blocked navigation, dynamic page changes, completion, and warm reopening without a new document. A disposable PNG exercises the actual native file-input callback and FileReader access, external-input isolation, preview/removal controls, picker cancellation, and removal of a poll without losing text. They never publish or contact X. Run them in a normal macOS desktop session so WebKit can start its rendering process.
 
 `--demo` opens the welcome screen without contacting X. `--diagnose` reports navigation paths, focus states, elapsed loading time, and surface counts. It omits URL queries, credentials, and post text. Do not commit diagnostic output or personal screenshots.
 
-The live sign-in and composer were checked during development. Version 0.6.0 also checks restored typing/caret behavior after the account menu, reply settings, and emoji search, insertion, and dismissal. The 0.5.0 release candidate was checked against live X using the app icon: native image selection and image paste with ⌘V both displayed a preview, and removal restored the empty composer. The poll's removal control was checked against live X. Drag/drop is covered by WebKit fixtures; a Finder-to-X drag has not been manually verified. No post was published during these checks. Publication and account-specific media/verification flows require manual testing by the account owner. X can change its DOM or embedded-browser support; recognition rules live in `Sources/MinTwitter/Resources/focus.js`.
+The live sign-in and composer were checked during development. Version 0.6.0 also checks restored typing/caret behavior after the account menu, reply settings, and emoji search, insertion, and dismissal. The 0.5.0 release candidate was checked against live X using the app icon: native image selection and image paste with ⌘V both displayed a preview, and removal restored the empty composer. The poll's removal control was checked against live X. Drag/drop is covered by WebKit fixtures; a Finder-to-X drag has not been manually verified. No post was published during these checks. Publication and account-specific media/verification flows require manual testing by the account owner. X can change its DOM or embedded-browser support; recognition rules live in `Sources/MinimalBird/Resources/focus.js`.
 
 ## Sharing and distribution
 
 The repository contains source, the original icon generator and preview, tests, a macOS CI workflow, and the GNU GPL v3.0 license. Generated apps, build caches, logs, environment files, and local settings are ignored. Cookies and credentials are stored outside the repository by WebKit.
 
-The default build produces a locally ad-hoc-signed app for personal use. Quit Min Twitter before updating it; the installer verifies and replaces the complete bundle. This project does not include certificates, signing secrets, or an updater.
+The default build produces a locally ad-hoc-signed app for personal use. Quit Minimal Bird before updating it; the installer verifies and replaces the complete bundle. This project does not include certificates, signing secrets, or an updater.
 
 To prepare a release after committing changes, run `./scripts/package-release.sh`. It builds a universal app for Apple Silicon and Intel, runs the unit and WebKit checks, and writes the app ZIP, a source ZIP containing only committed files, and SHA-256 checksums into `build/releases/`. The binary has a macOS 14 minimum deployment target and is stripped of debug symbols. Source archives contain no Git metadata, local account preferences, WebKit sessions, or build caches. The binary ZIP is labeled `macos-local` until it passes the notarized distribution workflow. If sharing that build for testing, clearly identify it as experimental and not notarized; distribute its matching source ZIP and checksums alongside it.
 
 For a notarized binary, install your own **Developer ID Application** certificate and store notarization credentials in a `notarytool` keychain profile. Then run:
 
 ```sh
-export MIN_TWITTER_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
-export MIN_TWITTER_NOTARY_PROFILE="your-notary-profile"
+export MINIMAL_BIRD_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+export MINIMAL_BIRD_NOTARY_PROFILE="your-notary-profile"
 ./scripts/package-release.sh --notarize
 ```
 
@@ -97,12 +97,12 @@ See [CODE_REVIEW.md](CODE_REVIEW.md) for release findings and verification limit
 
 ## License
 
-Copyright (c) 2026 Min Twitter contributors. Licensed under the **GNU General Public License v3.0 only** (`GPL-3.0-only`); see [LICENSE](LICENSE).
+Copyright (c) 2026 Minimal Bird contributors. Licensed under the **GNU General Public License v3.0 only** (`GPL-3.0-only`); see [LICENSE](LICENSE).
 
 You may use, study, modify, and share this software. If you distribute a modified version, it must remain under GPLv3 and recipients must receive the corresponding source under the license’s terms. Private modifications do not have to be published. Commercial use and charging for copies are allowed; GPL protects software freedom, not a zero price. There is no warranty.
 
 ## Acknowledgments
 
-Thanks to [Search](https://github.com/driceroland/Search) by [Office Commun](https://officecommun.com/) for the inspiration: a small, focused Mac browser built with WebKit. Its approach helped shape the idea for Min Twitter.
+Thanks to [Search](https://github.com/driceroland/Search) by [Office Commun](https://officecommun.com/) for the inspiration: a small, focused Mac browser built with WebKit. Its approach helped shape the idea for Minimal Bird.
 
-Min Twitter is a separate AppKit application using Apple's `WKWebView` directly. It does not bundle Search or depend on its code. Please check out Search and support its contributors.
+Minimal Bird is a separate AppKit application using Apple's `WKWebView` directly. It does not bundle Search or depend on its code. Please check out Search and support its contributors.

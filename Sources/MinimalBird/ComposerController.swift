@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2026 Min Twitter contributors
+// Copyright (c) 2026 Minimal Bird contributors
 
 import AppKit
 import WebKit
@@ -54,7 +54,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         configuration.userContentController.add(WeakFocusHandler(self), name: "focus")
         if CommandLine.arguments.contains("--diagnose") {
-            configuration.userContentController.addUserScript(WKUserScript(source: "window.__minTwitterDiagnose = true;",
+            configuration.userContentController.addUserScript(WKUserScript(source: "window.__minimalBirdDiagnose = true;",
                 injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
         if let source = Resource.read("focus", extension: "js") {
@@ -212,7 +212,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
                   let window = self.viewIfLoaded?.window, window.isKeyWindow,
                   window.attachedSheet == nil else { return }
             window.makeFirstResponder(self.webView)
-            self.webView.evaluateJavaScript("window.__minTwitterFocusEditor?.() ?? false", completionHandler: nil)
+            self.webView.evaluateJavaScript("window.__minimalBirdFocusEditor?.() ?? false", completionHandler: nil)
         }
     }
 
@@ -225,7 +225,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             warmOpening = true
             state = "loading"
             showCover(title: "Opening composer…", detail: "", symbol: "square.and.pencil", loading: true)
-            webView.evaluateJavaScript("window.__minTwitterOpenComposer?.() ?? false") { [weak self] result, _ in
+            webView.evaluateJavaScript("window.__minimalBirdOpenComposer?.() ?? false") { [weak self] result, _ in
                 guard let self else { return }
                 if result as? Bool == true { self.armTimeout() }
                 else { self.loadComposer() }
@@ -255,7 +255,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         guard confirmDiscard() else { return }
         let alert = NSAlert()
         alert.messageText = "Sign out of this app?"
-        alert.informativeText = "This removes Min Twitter’s cookies and website data. Your other browsers stay signed in."
+        alert.informativeText = "This removes Minimal Bird’s cookies and website data. Your other browsers stay signed in."
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Sign out")
         guard alert.runModal() == .alertSecondButtonReturn else { restoreEditorFocus(); return }
@@ -349,7 +349,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         if url.absoluteString == "about:blank" { decisionHandler(.allow); return }
         let destination = NavigationPolicy.destination(for: url)
         guard destination != .blocked else {
-            status.stringValue = "Only posting is available in Min Twitter."
+            status.stringValue = "Only posting is available in Minimal Bird."
             decisionHandler(.cancel)
             return
         }
@@ -374,7 +374,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard let self else { return }
-            let value = try? await self.webView.evaluateJavaScript("JSON.stringify({surfaces:document.querySelectorAll('[data-mt-surface]').length,editors:document.querySelectorAll('[contenteditable=true]').length})")
+            let value = try? await self.webView.evaluateJavaScript("JSON.stringify({surfaces:document.querySelectorAll('[data-mb-surface]').length,editors:document.querySelectorAll('[contenteditable=true]').length})")
             print("Native state: \(self.state); layout: \(value ?? "unavailable")")
             fflush(stdout)
         }

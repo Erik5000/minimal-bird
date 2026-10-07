@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2026 Min Twitter contributors
+// Copyright (c) 2026 Minimal Bird contributors
 
 import AppKit
 import WebKit
@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
-        window.title = "Min Twitter"
+        window.title = "Minimal Bird"
         window.titleVisibility = .visible
         window.titlebarAppearsTransparent = true
         window.backgroundColor = Palette.paper
@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func updateWindowTitle() {
         guard let window else { return }
         let label = accounts.profiles.first { $0.id == accounts.selectedID }?.label ?? ""
-        window.title = accounts.profiles.count > 1 ? "Min Twitter · \(label)" : "Min Twitter"
+        window.title = accounts.profiles.count > 1 ? "Minimal Bird · \(label)" : "Minimal Bird"
     }
 
     @objc private func switchAccount(_ sender: NSMenuItem) {
@@ -119,13 +119,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About Min Twitter", action: #selector(about), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About Minimal Bird", action: #selector(about), keyEquivalent: "")
         let signOut = appMenu.addItem(withTitle: "Sign out…", action: #selector(ComposerController.signOut), keyEquivalent: "")
         signOut.target = controller
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Hide Min Twitter", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide Minimal Bird", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit Min Twitter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit Minimal Bird", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         menu.addItem(appItem)
         let editItem = NSMenuItem()
@@ -168,8 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func about() {
         let alert = NSAlert()
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        alert.messageText = version.map { "Min Twitter \($0)" } ?? "Min Twitter"
-        alert.informativeText = "A little space to write, post, and get on with your day.\n\nUses X’s website in Apple WebKit. No API keys. No analytics.\n\nFree software under GNU GPL v3.0 only.\nCopyright © 2026 Min Twitter contributors.\nProvided without warranty.\n\nInspired by Search by Office Commun.\nIndependent software, not affiliated with X."
+        alert.messageText = version.map { "Minimal Bird \($0)" } ?? "Minimal Bird"
+        alert.informativeText = "A little space to write, post, and get on with your day.\n\nUses X’s website in Apple WebKit. No API keys. No analytics.\n\nFree software under GNU GPL v3.0 only.\nCopyright © 2026 Minimal Bird contributors.\nProvided without warranty.\n\nInspired by Search by Office Commun.\nIndependent software, not affiliated with X."
         alert.addButton(withTitle: "OK")
         let license = Bundle.main.url(forResource: "LICENSE", withExtension: "txt")
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
@@ -199,7 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         text.scrollRangeToVisible(NSRange(location: 0, length: 0))
         let alert = NSAlert()
         alert.messageText = "GNU General Public License v3.0"
-        alert.informativeText = "You may use, modify, and share Min Twitter under these terms. This software comes without warranty."
+        alert.informativeText = "You may use, modify, and share Minimal Bird under these terms. This software comes without warranty."
         alert.accessoryView = scroll
         let done = alert.addButton(withTitle: "Done")
         alert.window.initialFirstResponder = done

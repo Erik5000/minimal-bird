@@ -1,10 +1,10 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-only
-# Copyright (c) 2026 Min Twitter contributors
+# Copyright (c) 2026 Minimal Bird contributors
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export CLANG_MODULE_CACHE_PATH="${TMPDIR:-/tmp}/min-twitter-clang-cache"
-export SWIFTPM_MODULECACHE_OVERRIDE="${TMPDIR:-/tmp}/min-twitter-swift-cache"
+export CLANG_MODULE_CACHE_PATH="${TMPDIR:-/tmp}/minimal-bird-clang-cache"
+export SWIFTPM_MODULECACHE_OVERRIDE="${TMPDIR:-/tmp}/minimal-bird-swift-cache"
 BUILD_FLAGS=(-c release --disable-sandbox)
 if [[ "$#" == 1 && "${1:-}" == "--universal" ]]; then
   BUILD_FLAGS+=(--arch arm64 --arch x86_64)
@@ -15,14 +15,14 @@ fi
 swift build "${BUILD_FLAGS[@]}"
 BIN_DIR="$(swift build "${BUILD_FLAGS[@]}" --show-bin-path)"
 mkdir -p "$PWD/build"
-OUTPUT_APP="$PWD/build/Min Twitter.app"
+OUTPUT_APP="$PWD/build/Minimal Bird.app"
 STAGE_DIR="$(mktemp -d "$PWD/build/.app-stage.XXXXXX")"
 trap 'rm -rf "$STAGE_DIR"' EXIT
-APP_DIR="$STAGE_DIR/Min Twitter.app"
+APP_DIR="$STAGE_DIR/Minimal Bird.app"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
-cp "$BIN_DIR/MinTwitter" "$APP_DIR/Contents/MacOS/MinTwitter"
-/usr/bin/strip -S "$APP_DIR/Contents/MacOS/MinTwitter"
-cp -R "$BIN_DIR/MinTwitter_MinTwitter.bundle" "$APP_DIR/Contents/Resources/"
+cp "$BIN_DIR/MinimalBird" "$APP_DIR/Contents/MacOS/MinimalBird"
+/usr/bin/strip -S "$APP_DIR/Contents/MacOS/MinimalBird"
+cp -R "$BIN_DIR/MinimalBird_MinimalBird.bundle" "$APP_DIR/Contents/Resources/"
 cp LICENSE "$APP_DIR/Contents/Resources/LICENSE.txt"
 cp NOTICE "$APP_DIR/Contents/Resources/NOTICE.txt"
 ICON_SET="$PWD/build/AppIcon.iconset"
@@ -32,13 +32,13 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Min Twitter</string>
-  <key>CFBundleDisplayName</key><string>Min Twitter</string>
-  <key>CFBundleIdentifier</key><string>local.mintwitter.app</string>
-  <key>CFBundleExecutable</key><string>MinTwitter</string>
+  <key>CFBundleName</key><string>Minimal Bird</string>
+  <key>CFBundleDisplayName</key><string>Minimal Bird</string>
+  <key>CFBundleIdentifier</key><string>io.github.erik5000.minimalbird</string>
+  <key>CFBundleExecutable</key><string>MinimalBird</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.6.1</string>
-  <key>CFBundleVersion</key><string>9</string>
+  <key>CFBundleShortVersionString</key><string>0.7.0</string>
+  <key>CFBundleVersion</key><string>10</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -46,7 +46,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
-SIGNING_IDENTITY="${MIN_TWITTER_SIGNING_IDENTITY:--}"
+SIGNING_IDENTITY="${MINIMAL_BIRD_SIGNING_IDENTITY:--}"
 SIGN_FLAGS=(--force --options runtime --sign "$SIGNING_IDENTITY")
 if [[ "$SIGNING_IDENTITY" != "-" ]]; then SIGN_FLAGS+=(--timestamp); fi
 codesign "${SIGN_FLAGS[@]}" "$APP_DIR"

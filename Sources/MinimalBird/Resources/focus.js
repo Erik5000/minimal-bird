@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (c) 2026 Min Twitter contributors
+// Copyright (c) 2026 Minimal Bird contributors
 
 (() => {
   'use strict';
-  if (window.__minTwitterInstalled) return;
-  window.__minTwitterInstalled = true;
+  if (window.__minimalBirdInstalled) return;
+  window.__minimalBirdInstalled = true;
 
   const composerPaths = new Set(['/compose/post', '/compose/tweet']);
   const loginPaths = new Set(['/login', '/i/flow/login', '/i/jf/onboarding/web', '/account/access',
@@ -53,7 +53,7 @@
     }
     return document.activeElement === editor;
   }
-  window.__minTwitterFocusEditor = focusEditor;
+  window.__minimalBirdFocusEditor = focusEditor;
 
   document.addEventListener('focusin', event => {
     if (surface?.contains(event.target) && editable(event.target)) lastEditor = event.target;
@@ -75,7 +75,7 @@
     for (const node of popovers) {
       if (!node.isConnected || !node.getClientRects().length || node.getAttribute('aria-hidden') === 'true'
           || node.closest(forbiddenSurface) || node.querySelector(forbiddenSurface)) {
-        node.removeAttribute('data-mt-popover'); popovers.delete(node);
+        node.removeAttribute('data-mb-popover'); popovers.delete(node);
       }
     }
     if (popupRequest && performance.now() <= popupRequest.until) {
@@ -87,11 +87,11 @@
             || [...popovers].some(popup => popup !== node && popup.contains(node))) continue;
         for (const child of popovers) {
           if (child !== node && node.contains(child)) {
-            child.removeAttribute('data-mt-popover'); popovers.delete(child);
+            child.removeAttribute('data-mb-popover'); popovers.delete(child);
           }
         }
         popovers.add(node);
-        node.setAttribute('data-mt-popover', '');
+        node.setAttribute('data-mb-popover', '');
         restrictSurface(node, 'authoring'); // Keep the popup's own close/back controls.
       }
     } else { popupRequest = null; }
@@ -136,21 +136,21 @@
   }
 
   const style = document.createElement('style');
-  style.id = 'min-twitter-curtain';
+  style.id = 'minimal-bird-curtain';
   style.textContent = `
     html { visibility: hidden !important; background: #faf9f6 !important; }
     body * { visibility: hidden !important; pointer-events: none !important; }
-    [data-mt-surface], [data-mt-surface] *, [data-mt-popover], [data-mt-popover] * {
+    [data-mb-surface], [data-mb-surface] *, [data-mb-popover], [data-mb-popover] * {
       visibility: visible !important; pointer-events: auto !important;
     }
-    [data-mt-surface] button *, [data-mt-popover] button * { pointer-events: none !important; }
-    [data-mt-popup-path] {
+    [data-mb-surface] button *, [data-mb-popover] button * { pointer-events: none !important; }
+    [data-mb-popup-path] {
       transform: none !important; filter: none !important; backdrop-filter: none !important;
       -webkit-backdrop-filter: none !important; perspective: none !important;
       contain: none !important; will-change: auto !important; opacity: 1 !important;
       overflow: visible !important; clip: auto !important; clip-path: none !important;
     }
-    [data-mt-popover] {
+    [data-mb-popover] {
       position: fixed !important; inset: auto !important; left: 50% !important;
       bottom: 76px !important; transform: translateX(-50%) !important;
       width: 360px !important; min-width: 0 !important;
@@ -160,7 +160,7 @@
       border: 1px solid #e4e4dd !important; border-radius: 12px !important;
       box-shadow: 0 8px 32px #30342e26 !important;
     }
-    [data-mt-hidden], [data-mt-hidden] *,
+    [data-mb-hidden], [data-mb-hidden] *,
     [data-testid="sidebarColumn"], [data-testid="sidebarColumn"] *,
     header[role="banner"], header[role="banner"] *,
     [data-testid="tweet"], [data-testid="tweet"] *,
@@ -168,12 +168,12 @@
     [aria-label="Timeline: Your Home Timeline"] * {
       visibility: hidden !important; pointer-events: none !important;
     }
-    [data-mt-hidden] { display: none !important; }
-    [data-mt-surface] { box-shadow: none !important; }
+    [data-mb-hidden] { display: none !important; }
+    [data-mb-surface] { box-shadow: none !important; }
     html, body { background: #faf9f6 !important; }
-    html:has([data-mt-surface="composer"]),
-    body:has([data-mt-surface="composer"]) { overflow: hidden !important; }
-    [data-mt-surface="composer"] {
+    html:has([data-mb-surface="composer"]),
+    body:has([data-mb-surface="composer"]) { overflow: hidden !important; }
+    [data-mb-surface="composer"] {
       position: fixed !important; top: 0 !important; left: 0 !important;
       right: 0 !important; bottom: 0 !important;
       width: 100% !important; max-width: none !important;
@@ -184,7 +184,7 @@
       background: #faf9f6 !important; padding: 24px 28px !important;
       box-sizing: border-box !important;
     }
-    [data-mt-layout="bridge"] {
+    [data-mb-layout="bridge"] {
       display: grid !important; grid-template-columns: subgrid !important;
       grid-template-rows: subgrid !important; grid-area: 1 / 1 / -1 / -1 !important;
       position: static !important; width: auto !important; height: auto !important;
@@ -197,40 +197,40 @@
       align-self: stretch !important; justify-self: stretch !important;
       pointer-events: none !important;
     }
-    [data-mt-layout="omit"] { display: none !important; }
-    [data-mt-surface="composer"][data-mt-designed] {
+    [data-mb-layout="omit"] { display: none !important; }
+    [data-mb-surface="composer"][data-mb-designed] {
       display: grid !important;
       grid-template-columns: 38px minmax(0, 1fr);
       grid-template-rows: 38px minmax(110px, 1fr) auto 18px 40px;
       gap: 16px 12px !important;
       align-content: stretch !important;
     }
-    [data-mt-part="avatar"] {
+    [data-mb-part="avatar"] {
       display: block !important; flex-shrink: 0 !important;
       grid-area: 1 / 1 !important; width: 36px !important;
       height: 36px !important; min-width: 0 !important;
       margin: 0 !important; align-self: center !important;
       object-fit: cover !important; border-radius: 50% !important;
     }
-    [data-mt-part="avatar"] div, [data-mt-part="avatar"] a {
+    [data-mb-part="avatar"] div, [data-mb-part="avatar"] a {
       display: block !important; width: 100% !important; height: 100% !important;
       min-width: 0 !important; min-height: 0 !important;
     }
-    [data-mt-part="avatar"] img {
+    [data-mb-part="avatar"] img {
       display: block !important; width: 100% !important; height: 100% !important;
       object-fit: cover !important; border-radius: 50% !important;
     }
-    [data-mt-part="identity"] {
+    [data-mb-part="identity"] {
       grid-area: 1 / 2 !important; align-self: center;
       padding-right: 28px; color: #33372f !important;
       font: 600 13px -apple-system, BlinkMacSystemFont, sans-serif;
       line-height: 20px; cursor: pointer;
     }
-    [data-mt-part="identity"]:focus-visible { outline: 2px solid #b8492e; outline-offset: 4px; border-radius: 3px; }
-    [data-mt-part="identity"] small {
+    [data-mb-part="identity"]:focus-visible { outline: 2px solid #b8492e; outline-offset: 4px; border-radius: 3px; }
+    [data-mb-part="identity"] small {
       display: block; color: #97978e !important; font-size: 11px; font-weight: 400;
     }
-    [data-mt-part="writing"] {
+    [data-mb-part="writing"] {
       grid-area: 2 / 1 / 3 / -1 !important;
       min-height: 110px !important; height: 100% !important;
       max-height: none !important; width: 100% !important;
@@ -239,48 +239,48 @@
       border: none !important; padding-top: 8px !important;
       box-sizing: border-box !important;
     }
-    [data-mt-part="writing"] div {
+    [data-mb-part="writing"] div {
       background-color: transparent !important; border: none !important;
     }
-    [data-mt-part="writing"] [contenteditable="true"],
-    [data-mt-part="writing"][contenteditable="true"],
-    [data-mt-part="writing"] .public-DraftEditorPlaceholder-root {
+    [data-mb-part="writing"] [contenteditable="true"],
+    [data-mb-part="writing"][contenteditable="true"],
+    [data-mb-part="writing"] .public-DraftEditorPlaceholder-root {
       font: 400 20px/1.6 -apple-system, BlinkMacSystemFont, sans-serif !important;
       letter-spacing: -0.3px !important;
     }
-    [data-mt-part="writing"] .public-DraftEditorPlaceholder-root { color: #aaa99f !important; }
-    [data-mt-part="writing"] .public-DraftEditorPlaceholder-inner {
+    [data-mb-part="writing"] .public-DraftEditorPlaceholder-root { color: #aaa99f !important; }
+    [data-mb-part="writing"] .public-DraftEditorPlaceholder-inner {
       font: 400 20px/1.6 -apple-system, BlinkMacSystemFont, sans-serif !important;
       color: #aaa99f !important; letter-spacing: -0.3px !important;
     }
-    [data-mt-part="media"] {
+    [data-mb-part="media"] {
       grid-area: 3 / 1 / 4 / -1 !important; max-height: 150px !important;
       overflow-y: auto !important; border-radius: 10px !important;
     }
-    [data-mt-part="reply"] {
+    [data-mb-part="reply"] {
       grid-area: 4 / 1 / 5 / -1 !important; justify-self: start !important;
       color: #8c8e84 !important; font-size: 11px !important;
       height: 18px !important; min-height: 0 !important; padding: 0 !important;
       background: transparent !important;
     }
-    [data-mt-part="reply"] * { color: #8c8e84 !important; font-size: 11px !important; }
-    [data-mt-part="reply"] svg { width: 12px !important; height: 12px !important; }
-    [data-mt-part="tools"] {
+    [data-mb-part="reply"] * { color: #8c8e84 !important; font-size: 11px !important; }
+    [data-mb-part="reply"] svg { width: 12px !important; height: 12px !important; }
+    [data-mb-part="tools"] {
       grid-area: 5 / 1 / 6 / -1 !important;
       height: 40px !important; min-height: 0 !important; width: 100% !important;
       border: none !important; border-top: 1px solid #e4e4dd !important;
       padding: 9px 112px 0 0 !important; margin: 0 !important;
       box-sizing: border-box !important; background: transparent !important;
     }
-    [data-mt-part="tools"] div, [data-mt-part="tools"] nav { background-color: transparent !important; border: none !important; }
-    [data-mt-part="tools"] nav,
-    [data-mt-part="tools"] [role="tablist"] { height: 30px !important; min-height: 30px !important; }
-    [data-mt-part="tools"] button { color: #858d81 !important; width: 30px !important; height: 30px !important; }
-    [data-mt-part="tools"] svg { width: 18px !important; height: 18px !important; color: #858d81 !important; }
-    [data-mt-part="tools"] [data-testid="ScrollSnap-prevButtonWrapper"],
-    [data-mt-part="tools"] [data-testid="ScrollSnap-nextButtonWrapper"] { display: none !important; }
-    [data-mt-surface="composer"][data-mt-designed] [data-testid="tweetButton"],
-    [data-mt-surface="composer"][data-mt-designed] [data-testid="tweetButtonInline"] {
+    [data-mb-part="tools"] div, [data-mb-part="tools"] nav { background-color: transparent !important; border: none !important; }
+    [data-mb-part="tools"] nav,
+    [data-mb-part="tools"] [role="tablist"] { height: 30px !important; min-height: 30px !important; }
+    [data-mb-part="tools"] button { color: #858d81 !important; width: 30px !important; height: 30px !important; }
+    [data-mb-part="tools"] svg { width: 18px !important; height: 18px !important; color: #858d81 !important; }
+    [data-mb-part="tools"] [data-testid="ScrollSnap-prevButtonWrapper"],
+    [data-mb-part="tools"] [data-testid="ScrollSnap-nextButtonWrapper"] { display: none !important; }
+    [data-mb-surface="composer"][data-mb-designed] [data-testid="tweetButton"],
+    [data-mb-surface="composer"][data-mb-designed] [data-testid="tweetButtonInline"] {
       position: fixed !important; right: 28px !important; bottom: 24px !important;
       width: 86px !important; min-width: 86px !important; height: 34px !important;
       min-height: 34px !important; margin: 0 !important; padding: 0 15px !important;
@@ -288,13 +288,13 @@
       border-radius: 9px !important; z-index: 2 !important;
       font: 600 13px -apple-system, BlinkMacSystemFont, sans-serif !important;
     }
-    [data-mt-surface="composer"] [data-testid="tweetButton"] *,
-    [data-mt-surface="composer"] [data-testid="tweetButtonInline"] * { font-size: 13px !important; }
-    [data-mt-surface="composer"] [data-testid="unsentButton"],
-    [data-mt-surface="composer"] [data-testid="gifSearchButton"],
-    [data-mt-surface="composer"] [data-testid="geoButton"],
-    [data-mt-surface="composer"] [data-testid="scheduleOption"],
-    [data-mt-surface="composer"] [data-testid="contentDisclosureButton"] { display: none !important; }
+    [data-mb-surface="composer"] [data-testid="tweetButton"] *,
+    [data-mb-surface="composer"] [data-testid="tweetButtonInline"] * { font-size: 13px !important; }
+    [data-mb-surface="composer"] [data-testid="unsentButton"],
+    [data-mb-surface="composer"] [data-testid="gifSearchButton"],
+    [data-mb-surface="composer"] [data-testid="geoButton"],
+    [data-mb-surface="composer"] [data-testid="scheduleOption"],
+    [data-mb-surface="composer"] [data-testid="contentDisclosureButton"] { display: none !important; }
   `;
 
   function attachStyle() {
@@ -302,11 +302,11 @@
   }
 
   function hideSurface() {
-    document.querySelectorAll('[data-mt-surface]').forEach(node => node.removeAttribute('data-mt-surface'));
+    document.querySelectorAll('[data-mb-surface]').forEach(node => node.removeAttribute('data-mb-surface'));
     surface = null;
-    popovers.forEach(node => node.removeAttribute('data-mt-popover'));
+    popovers.forEach(node => node.removeAttribute('data-mb-popover'));
     popovers.clear();
-    popupPaths.forEach(node => node.removeAttribute('data-mt-popup-path'));
+    popupPaths.forEach(node => node.removeAttribute('data-mb-popup-path'));
     popupPaths.clear();
     popupRequest = null;
   }
@@ -314,7 +314,7 @@
   function showSurface(node, mode) {
     if (surface !== node) {
       hideSurface();
-      node.setAttribute('data-mt-surface', mode);
+      node.setAttribute('data-mb-surface', mode);
       surface = node;
     }
     // Remove the rest of the page from keyboard navigation and accessibility.
@@ -328,10 +328,10 @@
       while (ancestor) { nextPopupPaths.add(ancestor); ancestor = ancestor.parentElement; }
     }
     for (const path of popupPaths) {
-      if (!nextPopupPaths.has(path)) { path.removeAttribute('data-mt-popup-path'); popupPaths.delete(path); }
+      if (!nextPopupPaths.has(path)) { path.removeAttribute('data-mb-popup-path'); popupPaths.delete(path); }
     }
     for (const path of nextPopupPaths) {
-      if (!popupPaths.has(path)) { path.setAttribute('data-mt-popup-path', ''); popupPaths.add(path); }
+      if (!popupPaths.has(path)) { path.setAttribute('data-mb-popup-path', ''); popupPaths.add(path); }
     }
     const allowedBranches = new Set();
     for (const leaf of [node, ...supported]) {
@@ -346,10 +346,10 @@
       }
     }
     for (const node of inertNodes) {
-      if (!nextInert.has(node)) { node.inert = false; node.removeAttribute('data-mt-inert'); inertNodes.delete(node); }
+      if (!nextInert.has(node)) { node.inert = false; node.removeAttribute('data-mb-inert'); inertNodes.delete(node); }
     }
     for (const node of nextInert) {
-      if (!node.inert) { node.inert = true; node.setAttribute('data-mt-inert', ''); inertNodes.add(node); }
+      if (!node.inert) { node.inert = true; node.setAttribute('data-mb-inert', ''); inertNodes.add(node); }
     }
   }
 
@@ -396,7 +396,7 @@
   }
 
   function composerAvatar(root) {
-    const original = root.querySelector('[data-testid^="UserAvatar-Container-"]:not([data-mt-fallback-avatar])')
+    const original = root.querySelector('[data-testid^="UserAvatar-Container-"]:not([data-mb-fallback-avatar])')
       || root.querySelector('a:has(img)');
     const account = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
     const handle = profile().handle?.slice(1);
@@ -414,7 +414,7 @@
     let avatar = fallbackAvatars.get(root);
     if (!avatar?.isConnected) {
       avatar = document.createElement('img');
-      avatar.setAttribute('data-mt-fallback-avatar', '');
+      avatar.setAttribute('data-mb-fallback-avatar', '');
       avatar.alt = 'Your profile picture';
       fallbackAvatars.set(root, avatar);
       root.appendChild(avatar);
@@ -424,11 +424,11 @@
   }
 
   function clearDesign(root) {
-    root.querySelectorAll('[data-mt-layout], [data-mt-part]').forEach(node => {
-      node.removeAttribute('data-mt-layout');
-      node.removeAttribute('data-mt-part');
+    root.querySelectorAll('[data-mb-layout], [data-mb-part]').forEach(node => {
+      node.removeAttribute('data-mb-layout');
+      node.removeAttribute('data-mb-part');
     });
-    root.removeAttribute('data-mt-designed');
+    root.removeAttribute('data-mb-designed');
     identities.get(root)?.remove();
     identities.delete(root);
     fallbackAvatars.get(root)?.remove();
@@ -438,7 +438,7 @@
 
   function hasAuthoringMedia(root) {
     if (root.querySelector('[data-testid="attachments"], [data-testid="mediaPreview"], [data-testid="tweetPhoto"], video, canvas')) return true;
-    const isAvatar = node => node.closest('[data-testid^="UserAvatar-Container-"], [data-mt-part="avatar"], [data-mt-fallback-avatar], a[aria-disabled="true"]');
+    const isAvatar = node => node.closest('[data-testid^="UserAvatar-Container-"], [data-mb-part="avatar"], [data-mb-fallback-avatar], a[aria-disabled="true"]');
     if ([...root.querySelectorAll('img[src]')].some(image => !isAvatar(image))) return true;
     return [...root.querySelectorAll('div')].some(node => !isAvatar(node) && getComputedStyle(node).backgroundImage.includes('url('));
   }
@@ -464,7 +464,7 @@
     let identity = identities.get(root);
     if (!identity?.isConnected) {
       identity = document.createElement('div');
-      identity.setAttribute('data-mt-part', 'identity');
+      identity.setAttribute('data-mb-part', 'identity');
       identity.setAttribute('role', 'button');
       identity.setAttribute('tabindex', '0');
       identity.setAttribute('title', 'Switch accounts');
@@ -489,7 +489,7 @@
     // and newer preview wrappers are not guaranteed to use our known test IDs.
     const extraControls = [...root.querySelectorAll('button, [role="button"], [contenteditable="true"], input, textarea, select')]
       .filter(control => ![...parts.keys()].some(part => part === control || part.contains(control))
-        && !control.closest('[data-mt-hidden]')
+        && !control.closest('[data-mb-hidden]')
         && !control.matches('input[type="file"], input[type="hidden"], [data-testid="unsentButton"]'));
     if (extraControls.length) { clearDesign(root); return; }
     const previous = layouts.get(root);
@@ -501,13 +501,13 @@
     // Subgrid retains real wrapper geometry for X's press/anchor measurements.
     // display:contents makes those rectangles zero and can disable authoring
     // controls even when their buttons look correct. DOM parents stay intact.
-    root.querySelectorAll('[data-mt-layout]').forEach(node => node.removeAttribute('data-mt-layout'));
-    root.querySelectorAll('[data-mt-part]').forEach(node => {
-      if (!parts.has(node)) node.removeAttribute('data-mt-part');
+    root.querySelectorAll('[data-mb-layout]').forEach(node => node.removeAttribute('data-mb-layout'));
+    root.querySelectorAll('[data-mb-part]').forEach(node => {
+      if (!parts.has(node)) node.removeAttribute('data-mb-part');
     });
     const bridges = new Set([root]);
     for (const [part, kind] of parts) {
-      part.setAttribute('data-mt-part', kind);
+      part.setAttribute('data-mb-part', kind);
       let ancestor = part.parentElement;
       while (ancestor && ancestor !== root) {
         if (!parts.has(ancestor)) bridges.add(ancestor);
@@ -515,14 +515,14 @@
       }
     }
     for (const bridge of bridges) {
-      if (bridge !== root) bridge.setAttribute('data-mt-layout', 'bridge');
+      if (bridge !== root) bridge.setAttribute('data-mb-layout', 'bridge');
       for (const child of bridge.children) {
         if (!parts.has(child) && !bridges.has(child) && !['STYLE', 'SCRIPT'].includes(child.tagName)) {
-          child.setAttribute('data-mt-layout', 'omit');
+          child.setAttribute('data-mb-layout', 'omit');
         }
       }
     }
-    root.setAttribute('data-mt-designed', '');
+    root.setAttribute('data-mb-designed', '');
     layouts.set(root, { parts, bridges: new Map([...bridges].map(node => [node, [...node.children]])) });
   }
 
@@ -534,21 +534,21 @@
         if (link.querySelector('img') || link.matches('[data-testid^="UserAvatar-Container-"]')
             || link.querySelector('[data-testid^="UserAvatar-Container-"]')) {
           // Keep the composer's avatar, but never make it a doorway to a profile.
-          link.removeAttribute('data-mt-hidden');
+          link.removeAttribute('data-mb-hidden');
           link.setAttribute('tabindex', '-1');
           link.setAttribute('aria-disabled', 'true');
         } else {
-          link.setAttribute('data-mt-hidden', '');
+          link.setAttribute('data-mb-hidden', '');
         }
       }
     });
     if (mode === 'composer') {
-      root.querySelectorAll('[data-testid="app-bar-close"], [data-testid="app-bar-back"], [data-testid="AppTabBar_Home_Link"]').forEach(node => node.setAttribute('data-mt-hidden', ''));
+      root.querySelectorAll('[data-testid="app-bar-close"], [data-testid="app-bar-back"], [data-testid="AppTabBar_Home_Link"]').forEach(node => node.setAttribute('data-mb-hidden', ''));
     } else if (mode === 'login') {
-      root.querySelectorAll('iframe[src*="accounts.google.com"], iframe[src*="appleid.apple.com"]').forEach(frame => frame.setAttribute('data-mt-hidden', ''));
+      root.querySelectorAll('iframe[src*="accounts.google.com"], iframe[src*="appleid.apple.com"]').forEach(frame => frame.setAttribute('data-mb-hidden', ''));
       root.querySelectorAll('button, [role="button"]').forEach(button => {
         if (/\b(Google|Apple)\b/i.test((button.textContent || '') + ' ' + (button.getAttribute('aria-label') || '')) || /apple|google/i.test(button.dataset.testid || '')) {
-          button.setAttribute('data-mt-hidden', '');
+          button.setAttribute('data-mb-hidden', '');
         }
       });
     }
@@ -643,7 +643,7 @@
   document.addEventListener('click', event => {
     const target = event.target instanceof Element ? event.target : event.target?.parentElement;
     if (!target) return;
-    if (window.__minTwitterDiagnose && surface?.querySelector(editorSelector)) {
+    if (window.__minimalBirdDiagnose && surface?.querySelector(editorSelector)) {
       // Geometry and flags only: never include text, file names, values or URLs.
       const describe = node => {
         const bounds = node.getBoundingClientRect();
@@ -651,7 +651,7 @@
         return { tag: node.tagName, role: node.getAttribute('role'),
           testID: ['fileInput', 'toolBar', 'tweetButton', 'tweetButtonInline'].includes(testID) ? testID : null,
           linkRoute: node.matches('a[href]') ? routeOf(node.href) : null,
-          inert: !!node.closest('[inert]'), omitted: !!node.closest('[data-mt-layout="omit"]'),
+          inert: !!node.closest('[inert]'), omitted: !!node.closest('[data-mb-layout="omit"]'),
           disabled: !!node.disabled, width: bounds.width, height: bounds.height };
       };
       window.webkit?.messageHandlers?.focus?.postMessage({ state: 'diagnostic', details: JSON.stringify({
@@ -687,7 +687,7 @@
       event.stopImmediatePropagation();
       return;
     }
-    if (target.closest('[data-mt-part="identity"]')) {
+    if (target.closest('[data-mb-part="identity"]')) {
       event.preventDefault();
       event.stopImmediatePropagation();
       window.webkit?.messageHandlers?.focus?.postMessage({ state: 'accounts' });
@@ -730,7 +730,7 @@
     const button = event.target instanceof Element ? event.target.closest('button, [role="button"]') : null;
     if (event.button === 0 && button && surface?.contains(button) && surface.querySelector(editorSelector)
         && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
-        && !button.matches(postSelector + ', [data-mt-part="identity"]')) requestPopover(button, true);
+        && !button.matches(postSelector + ', [data-mb-part="identity"]')) requestPopover(button, true);
   }, true);
 
   // The large blank writing region should act like an editor, even when X's
@@ -738,13 +738,13 @@
   // selection, form fields, buttons, previews, or clicks inside authoring popups.
   document.addEventListener('mousedown', event => {
     const target = event.target instanceof Element ? event.target : null;
-    if (event.button !== 0 || !target || !surface?.hasAttribute('data-mt-designed') || popovers.size
+    if (event.button !== 0 || !target || !surface?.hasAttribute('data-mb-designed') || popovers.size
         || !surface.contains(target) || target.closest('button, a, input, textarea, select, [role="button"], [contenteditable="true"]')) return;
-    if ((target === surface || target.closest('[data-mt-part="writing"]')) && focusEditor()) event.preventDefault();
+    if ((target === surface || target.closest('[data-mb-part="writing"]')) && focusEditor()) event.preventDefault();
   }, true);
 
   document.addEventListener('keydown', event => {
-    if (event.target instanceof Element && event.target.closest('[data-mt-part="identity"]')
+    if (event.target instanceof Element && event.target.closest('[data-mb-part="identity"]')
         && ['Enter', ' '].includes(event.key)) {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -826,7 +826,7 @@
 
   // Invoked only by the native New Post action. Use X's existing router and
   // loaded assets; never open a feed or submit a post from this helper.
-  window.__minTwitterOpenComposer = () => {
+  window.__minimalBirdOpenComposer = () => {
     const existing = findComposer();
     finished = false;
     postRequested = false;
