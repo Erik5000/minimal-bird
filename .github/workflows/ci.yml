@@ -1,0 +1,14 @@
+name: macOS checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test --disable-sandbox
+      - run: bash -n scripts/*.sh
+      - run: ./scripts/build-app.sh --universal
+      - run: '"build/Min Twitter.app/Contents/MacOS/MinTwitter" --self-test'
