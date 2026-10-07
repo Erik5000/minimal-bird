@@ -203,6 +203,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         alert.accessoryView = scroll
         let done = alert.addButton(withTitle: "Done")
         alert.window.initialFirstResponder = done
+        // NSAlert lays out and focuses accessory views when its modal loop starts.
+        // Reset the scroll position after that layout, so the license opens at its title.
+        DispatchQueue.main.async {
+            alert.window.makeFirstResponder(done)
+            scroll.contentView.scroll(to: .zero)
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
         alert.runModal()
     }
 
