@@ -25,31 +25,39 @@ Sign in with your X username/email and password and complete any verification X 
 
 Write and attach images/video using the composer, then click **Post** yourself. X handles uploads, limits, account permissions, and submission. When X closes the composer after submission, the app shows a quiet finish screen. It does not independently verify publication or retrieve engagement.
 
-- **⌘N:** New post.
-- **⌘R:** Reload X; warns before discarding a detected draft.
+- **⌘N:** New post. The current text stays in Drafts.
+- **⌘D:** Show or hide the Drafts list below the composer.
+- **⌘R:** Reload X; your text is put back afterwards.
 - **⌘W / close button:** Hide the window while keeping the session and draft ready.
 - **Dock icon / Window → Show Composer:** Reopen the window.
-- **⌘Q:** Quit; warns about a detected draft.
+- **⌘Q:** Quit. Text stays in Drafts; the app only asks when attachments or a poll would be lost.
 - **⌘Z / ⇧⌘Z:** Undo / redo.
-- **Options menu → Sign out:** Clear this app's cookies and website data.
-- **Click your account name / Accounts menu:** Switch accounts or choose **Add account…**.
+- **Account name in the title bar:** Switch accounts, **Add account…**, New post, Reload, Drafts, and **Sign out…**.
 - **⌘1 through ⌘9:** Switch to one of the first nine saved accounts.
+
+## Drafts
+
+Everything you type is saved as a draft while you write, including every post of a thread. Drafts are kept per account in a private file on this Mac (`~/Library/Application Support/Minimal Bird/Drafts`, readable only by you) and are never sent anywhere by the app. They survive quitting, crashes, and sign-out.
+
+Click **Drafts** at the bottom of the window (or press ⌘D) to open the list. The draft you are editing is marked; click any other draft to put its text back into X's editor, and hover to delete one. A thread draft is restored post by post using X's own **+** button. Clearing the composer deletes its draft, and a draft is removed when X closes the composer after you click **Post**. Attachments and polls stay with X and are not kept in drafts. These are separate from X's own server-side drafts.
 
 For multiple accounts, choose **Add account…** and sign in once in the new session. Each account uses a separate persistent WebKit store. Switching keeps previously opened composers warm and preserves their drafts while the app runs. Your original sign-in is retained, and the active handle appears in the window title when multiple accounts are saved. Sign out clears only the selected account's session; its menu slot can be used to sign in again. These sessions are independent of account switching in another browser. Account handles and store identifiers are saved locally in app preferences, outside the repository.
 
-On quit, the app checks drafts in every opened account. Sessions survive relaunching; draft text does not. Keeping several accounts open uses more memory because each retains its own web view.
+On quit, the app checks every opened account for attachments or polls that would be lost. Sessions and drafts survive relaunching. Keeping several accounts open uses more memory because each retains its own web view.
 
-Window position and size are remembered. Drafts survive a hidden window but are not backed up across quitting or crashes.
+Window position and size are remembered.
 
-The composer has a single warm background, a grouped avatar/account header, an uncluttered writing area, and a compact bottom toolbar with the Post button. Layout wrappers are styled with CSS; the live editor, upload input, and submission button keep their original DOM parents and X event handlers. New media previews remain part of the layout. The writing area receives keyboard focus when it opens and when you return from native menus or dialogs. Returning to a draft preserves its caret position. Clicking the blank writing area also returns to the editor.
+## Design
 
-Expanded authoring, such as threads, polls, and unfamiliar image-preview controls, falls back to X's own layout so additional fields and remove/cancel buttons remain visible. Use X's **Remove poll** control to return to writing; the post text is retained. The compact layout returns when the extra controls are removed. Feed and navigation isolation remain active.
+The composer keeps X's own layout (single posts, threads, polls, link cards, and media all work as X intends) and draws it in one calm skin: a warm paper background, one system typeface, quiet ink and grey text, hairline borders, muted toolbar icons, and a single terracotta accent for **Post**, links, and the character ring. The skin measures X's computed colors and maps them onto this palette, so it does not depend on X's class names or a fixed layout and does not switch looks while you write. The live editor, upload input, and submission button keep their original DOM parents and X event handlers.
+
+The writing area receives keyboard focus when it opens and when you return from native menus or dialogs, with the caret where you left it. Focus restoration never takes focus from a control you are using inside the composer, such as a newly added thread post or a poll choice. Clicking blank space around a single post returns to its editor. Typing never plays the macOS alert sound: X's editor handles text itself, and keystrokes WebKit reports as unhandled end quietly in the app.
 
 Media selection uses X's original file input and the native Mac file chooser. Hidden upload inputs mounted outside the composer remain usable only through a composer action, while their surrounding page stays hidden and inert. Image previews and their removal controls remain available; cancelling the file chooser keeps the current composer.
 
 You can also paste an image with **⌘V** into the composer or drop image/video files onto it. These actions deliver the files to X's original upload input and change handler. Plain text paste keeps its normal behavior. X remains responsible for accepted formats, attachment limits, processing, and submission.
 
-Attachment detection includes images, videos, and previews painted as CSS backgrounds, even without known test IDs or removal buttons. Authoring with attachments uses X's original layout so its thumbnail rendering stays intact. Image paste/drop tests check that the PNG pixels decode and that thumbnails remain visible and removable.
+Attachment detection includes images, videos, and previews painted as CSS backgrounds, even without known test IDs or removal buttons. Link-card previews are not treated as attachments. Image paste/drop tests check that the PNG pixels decode and that thumbnails remain visible and removable.
 
 ## Loading and focus
 
@@ -69,7 +77,7 @@ swift test --disable-sandbox
 "build/Minimal Bird.app/Contents/MacOS/MinimalBird" --self-test
 ```
 
-Unit tests check allowed and blocked URLs, including deceptive hosts, and account metadata persistence. WebKit tests use synthetic pages and a nonpersistent store, plus disposable persistent stores for cookie-isolation checks. They check composer/login visibility, background isolation, text/poll draft detection, resizing across avatar layout changes, the account-menu bridge, blocked navigation, dynamic page changes, completion, and warm reopening without a new document. A disposable PNG exercises the actual native file-input callback and FileReader access, external-input isolation, preview/removal controls, picker cancellation, and removal of a poll without losing text. They never publish or contact X. Run them in a normal macOS desktop session so WebKit can start its rendering process.
+Unit tests check allowed and blocked URLs, including deceptive hosts, account metadata persistence, and the draft store (ordering, clearing, private file permissions, damaged files, the size limit). WebKit tests use synthetic pages and a nonpersistent store, plus disposable persistent stores for cookie-isolation checks. They check composer/login visibility, background isolation, the color/typeface skin, text/poll draft detection, thread focus and per-post draft reports, restoring a thread draft into the editors without duplicate paste, blocked navigation, dynamic page changes, completion, and warm reopening without a new document. A disposable PNG exercises the actual native file-input callback and FileReader access, external-input isolation, preview/removal controls, picker cancellation, and removal of a poll without losing text. They never publish or contact X. Run them in a normal macOS desktop session so WebKit can start its rendering process.
 
 `--demo` opens the welcome screen without contacting X. `--diagnose` reports navigation paths, focus states, elapsed loading time, and surface counts. It omits URL queries, credentials, and post text. Do not commit diagnostic output or personal screenshots.
 

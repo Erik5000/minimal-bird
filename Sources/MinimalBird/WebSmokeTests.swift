@@ -25,12 +25,17 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         web.navigationDelegate = self
         web.uiDelegate = self
         Task {
-            try? await Task.sleep(for: .seconds(20))
+            try? await Task.sleep(for: .seconds(40))
             print("FAIL: WebKit tests timed out. Run in an unrestricted desktop session.")
             exit(1)
         }
         Task {
-            do { try await exercise() }
+            do {
+                try await exercise()
+                if let folder = ProcessInfo.processInfo.environment["MINIMAL_BIRD_SNAPSHOTS"] {
+                    await snapshots(to: URL(fileURLWithPath: folder, isDirectory: true))
+                }
+            }
             catch { failures += 1; print("FAIL: \(error)") }
             print(failures == 0 ? "All WebKit smoke tests passed." : "\(failures) WebKit smoke test(s) failed.")
             exit(failures == 0 ? 0 : 1)
@@ -292,7 +297,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             </script>
             """
         await load(thread, path: "/compose/post")
-        try await js("const e=document.querySelector('#editor');e.focus();e.textContent='First post';e.dispatchEvent(new Event('input',{bubbles:true}))")
+        try await js("{const e=document.querySelector('#editor');e.focus();e.textContent='First post';e.dispatchEvent(new Event('input',{bubbles:true}))}")
         try await Task.sleep(for: .milliseconds(50))
         if lastDraft()?["posts"] as? [String] != ["First post"] || lastDraft()?["extras"] as? Bool != false {
             failures += 1; print("FAIL: composer text is reported for local drafts")
@@ -303,7 +308,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await Task.sleep(for: .milliseconds(80))
         try await js("window.__minimalBirdFocusEditor()")
         try await check("a newly added thread post keeps keyboard focus", "document.activeElement.dataset.testid==='tweetTextarea_1'")
-        try await js("const e=document.activeElement;e.textContent='Second post';e.dispatchEvent(new Event('input',{bubbles:true}))")
+        try await js("{const e=document.activeElement;e.textContent='Second post';e.dispatchEvent(new Event('input',{bubbles:true}))}")
         try await Task.sleep(for: .milliseconds(50))
         if lastDraft()?["posts"] as? [String] != ["First post", "Second post"] {
             failures += 1; print("FAIL: every post of a thread is reported in order")
@@ -503,6 +508,87 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await js("const outside=new DataTransfer();outside.items.add(new File([window.fixtureBytes],'outside.png',{type:'image/png'}));document.querySelector('#unrelated').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:outside}));void 0")
         try await Task.sleep(for: .milliseconds(50))
         try await check("dropping outside the composer does not attach a file", "window.fixtureReadCount===\(before) && !document.querySelector('#uploaded')")
+    }
+
+    /// Renders the real window around synthetic X pages for visual review.
+    /// Set MINIMAL_BIRD_SNAPSHOTS to a folder; nothing contacts X.
+    private func snapshots(to folder: URL) async {
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let avatar = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' fill='%237d8a86'/></svg>"
+        let blue = "rgb(29,155,240)", grey = "rgb(83,100,113)", rule = "rgb(207,217,222)"
+        func post(_ index: Int, _ text: String, active: Bool) -> String {
+            let connector: String = index == 0 ? "<div style='width:2px;flex:1;margin-top:4px;background:\(rule)'></div>" : ""
+            let audience: String = index == 0 ? "<button style='color:\(blue);border:1px solid \(rule);border-radius:999px;padding:2px 12px;font-weight:700;font-size:14px;background:#fff'>Everyone</button>" : ""
+            let top: String = index == 0 ? "4" : "12"
+            let opacity: String = active ? "1" : "0.5"
+            let parts: [String] = [
+                "<div style='display:flex;gap:10px;padding-top:\(top)px;opacity:\(opacity)'>",
+                "<div style='display:flex;flex-direction:column;align-items:center;width:40px'>",
+                "<div data-testid='UserAvatar-Container-writer'><img src=\"\(avatar)\" style='width:40px;height:40px;border-radius:50%'></div>",
+                connector, "</div><div style='flex:1;min-width:0'>", audience,
+                "<div data-testid='tweetTextarea_\(index)RichTextInputContainer' style='padding:10px 0'>",
+                "<div data-testid='tweetTextarea_\(index)' contenteditable='true' style='font-size:20px;line-height:24px;outline:none;color:rgb(15,20,25)'>",
+                text, "</div></div></div></div>"
+            ]
+            return parts.joined()
+        }
+        let tools = ["M4 5h16v14H4z", "M5 12h14M12 5v14", "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z"].map { (path: String) -> String in
+            "<button aria-label='Tool' style='color:\(blue);background:none;border:0'><svg viewBox='0 0 24 24' width='20' height='20' style='fill:none;stroke:currentColor;stroke-width:2'><path d='\(path)'/></svg></button>"
+        }.joined()
+        let first = post(0, "Design your working environment. Social media always drags; it is hard to keep the willpower not to get pulled into the feed.<br>So I built a small composer: <span style='color:\(blue)'>github.com/Erik5000/minimal-bird</span>", active: true)
+        let second = post(1, "", active: false)
+        let page = """
+            <!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff;font-family:Helvetica;color:rgb(15,20,25)">
+            <main><article data-testid="tweet">Feed</article></main>
+            <div role="dialog" style="background:#fff">
+              <div style="display:flex;justify-content:space-between;align-items:center;height:52px">
+                <button data-testid="app-bar-close">X</button>
+                <div style="display:flex;gap:12px"><button data-testid="unsentButton" style="color:\(blue)">Drafts</button>
+                <button data-testid="tweetButton" disabled aria-disabled="true" style="background:\(blue);color:#fff;border:0;border-radius:999px;padding:0 16px;height:36px;font-weight:700;font-size:15px;opacity:.5">Post all</button></div>
+              </div>
+              \(first)
+              <div style="margin-left:50px;display:flex;border:1px solid \(rule);border-radius:16px;overflow:hidden" data-testid="card.wrapper">
+                <div style="width:110px;height:96px;background:rgb(247,249,249)"></div>
+                <div style="padding:12px;font-size:15px;border-left:1px solid \(rule)"><div style="color:\(grey)">github.com</div><div>Minimal Bird: a distraction-free composer</div></div>
+              </div>
+              <div style="padding-left:50px;border-bottom:1px solid rgb(239,243,244)"><button aria-label="Everyone can reply" style="color:\(blue);font-weight:700;font-size:14px;padding:10px 0;background:none;border:0">Everyone can reply</button></div>
+              <div data-testid="toolBar" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0 8px 40px">
+                <div style="display:flex;gap:14px">\(tools)</div>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <svg width="26" height="26"><circle cx="13" cy="13" r="11" fill="none" stroke-width="2" style="stroke:rgb(239,243,244)"/><circle cx="13" cy="13" r="11" fill="none" stroke-width="2" stroke-dasharray="44 100" style="stroke:\(blue)"/></svg>
+                  <button data-testid="addButton" aria-label="Add post" style="color:\(blue);border:1px solid \(rule);border-radius:50%;width:26px;height:26px;background:none">+</button>
+                </div>
+              </div>
+              \(second)
+            </div></body></html>
+            """
+        let store = DraftStore(url: nil)
+        store.save(["Notes on calm software: fewer surfaces, more finishing."], id: nil, now: Date().addingTimeInterval(-7_200))
+        store.save(["A thread about small tools", "Second part of the thread"], id: nil, now: Date().addingTimeInterval(-86_400 * 2))
+        store.save(["Reply idea for later"], id: nil, now: Date().addingTimeInterval(-600))
+        let delegate = AppDelegate()
+        let controller = ComposerController(dataStore: .nonPersistent(), drafts: store)
+        let window = delegate.makePreviewWindow(for: controller, handle: "@writer")
+        window.setContentSize(NSSize(width: 580, height: 660))
+        window.makeKeyAndOrderFront(nil)
+        controller.showFixture(page)
+        try? await Task.sleep(for: .seconds(2))
+        await write(controller, "composer.png", to: folder)
+        controller.toggleDrafts()
+        try? await Task.sleep(for: .milliseconds(600))
+        await write(controller, "composer-drafts.png", to: folder)
+        controller.start(demo: true)
+        try? await Task.sleep(for: .milliseconds(300))
+        await write(controller, "welcome.png", to: folder)
+        window.close()
+    }
+
+    private func write(_ controller: ComposerController, _ name: String, to folder: URL) async {
+        guard let rep = await controller.snapshotWindow(), let data = rep.representation(using: .png, properties: [:]) else {
+            print("NOTE: snapshot \(name) unavailable"); return
+        }
+        try? data.write(to: folder.appendingPathComponent(name))
+        print("Snapshot: \(name)")
     }
 
     private func checkAccountStores() async throws {

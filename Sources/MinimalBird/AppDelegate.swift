@@ -23,17 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         controller = controllerFor(accounts.profiles.first { $0.id == accounts.selectedID }!)
         buildMenu()
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 660),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                          backing: .buffered, defer: false)
-        window.title = "Minimal Bird"
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.backgroundColor = Palette.paper
-        window.appearance = NSAppearance(named: .aqua)
-        window.minSize = NSSize(width: 440, height: 460)
-        window.contentViewController = controller
-        window.addTitlebarAccessoryViewController(makeAccountAccessory())
+        window = makeWindow(for: controller)
         updateWindowTitle()
         window.delegate = self
         window.isReleasedWhenClosed = false
@@ -42,6 +32,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         controller.start(demo: CommandLine.arguments.contains("--demo"))
+    }
+
+    private func makeWindow(for content: ComposerController) -> NSWindow {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 660),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered, defer: false)
+        window.title = "Minimal Bird"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.backgroundColor = Palette.paper
+        window.appearance = NSAppearance(named: .aqua)
+        window.minSize = NSSize(width: 440, height: 460)
+        window.contentViewController = content
+        window.addTitlebarAccessoryViewController(makeAccountAccessory())
+        return window
+    }
+
+    /// The app's window around a given controller, for visual snapshots in the
+    /// self-test. It has no menus, saved frame or account storage.
+    func makePreviewWindow(for content: ComposerController, handle: String) -> NSWindow {
+        let preview = makeWindow(for: content)
+        accountButton.title = handle
+        preview.isReleasedWhenClosed = false
+        return preview
     }
 
     private func controllerFor(_ profile: AccountProfile) -> ComposerController {

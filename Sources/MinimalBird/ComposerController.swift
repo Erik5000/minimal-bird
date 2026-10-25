@@ -165,6 +165,28 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         }
     }
 
+    /// Self-test only: shows a synthetic composer page instead of X.
+    func showFixture(_ html: String) {
+        _ = view
+        state = "loading"
+        webView.loadHTMLString(html, baseURL: NavigationPolicy.composerURL)
+    }
+
+    /// Self-test only: the window with the web content drawn in, since a
+    /// view snapshot cannot capture WebKit's separate rendering process.
+    func snapshotWindow() async -> NSBitmapImageRep? {
+        guard let frameView = view.window?.contentView?.superview,
+              let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else { return nil }
+        frameView.cacheDisplay(in: frameView.bounds, to: rep)
+        guard !webView.isHidden, let page = try? await webView.takeSnapshot(configuration: nil) else { return rep }
+        let rect = webView.convert(webView.bounds, to: frameView)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        page.draw(in: rect)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep
+    }
+
     private func showCover(title: String, detail: String, symbol: String, button: String? = nil, loading: Bool = false) {
         webView.isHidden = true
         cover.isHidden = false

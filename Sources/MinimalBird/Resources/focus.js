@@ -261,7 +261,6 @@
     [data-mb-surface="composer"] [data-testid="tweetButton"],
     [data-mb-surface="composer"] [data-testid="tweetButtonInline"] {
       border-radius: 999px !important; border-color: transparent !important;
-      transition: background-color 120ms ease, opacity 120ms ease;
     }
     [data-mb-surface="composer"] [data-testid="tweetButton"]:is([disabled], [aria-disabled="true"]),
     [data-mb-surface="composer"] [data-testid="tweetButtonInline"]:is([disabled], [aria-disabled="true"]) {
