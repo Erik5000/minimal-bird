@@ -89,32 +89,22 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("composer is visible", "getComputedStyle(document.querySelector('#editor')).visibility === 'visible'")
         try await check("feed and notifications stay hidden", "['feed','notifications','explore'].every(id => getComputedStyle(document.getElementById(id)).visibility === 'hidden')")
         try await check("background excluded from keyboard and accessibility", "document.querySelector('main').inert && document.querySelector('header').inert")
-        try await check("close button is hidden", "getComputedStyle(document.querySelector('#close')).display === 'none'")
+        try await check("close button is concealed in place and cannot be used", "(()=>{const c=document.querySelector('#close'),s=getComputedStyle(c);return s.visibility==='hidden' && s.pointerEvents==='none' && !c.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))})()")
         try await check("profile avatar remains visible", "getComputedStyle(document.querySelector('#avatar img')).visibility === 'visible'")
-        try await js("document.querySelector('[data-mb-part=identity]').click()")
-        try await Task.sleep(for: .milliseconds(50))
-        if messages.last?["state"] as? String != "accounts" {
-            failures += 1; print("FAIL: profile header opens native account menu")
-        } else { print("PASS: profile header opens native account menu") }
         try await exerciseFocusAndPopovers()
-        web.setFrameSize(NSSize(width: 1680, height: 960))
-        try await js("document.querySelector('[data-testid=SideNav_AccountSwitcher_Button]').appendChild(document.querySelector('#avatar'));void 0")
-        try await Task.sleep(for: .milliseconds(50))
-        try await check("avatar stays in the composer when X moves it outside at wide sizes", "(()=>{const a=document.querySelector('[data-mb-fallback-avatar]'),r=a?.getBoundingClientRect();return a?.src==='https://fixtures.invalid/avatar.png' && r.width===36 && r.height===36 && getComputedStyle(a).visibility==='visible' && document.querySelector('main').inert})()")
         web.setFrameSize(NSSize(width: 480, height: 420))
-        try await js("document.querySelector('#composer').appendChild(document.querySelector('#avatar'));document.querySelector('#avatar').style.display='none';void 0")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("original avatar returns without duplication after narrowing", "!document.querySelector('[data-mb-fallback-avatar]') && document.querySelector('#avatar').getBoundingClientRect().width===36 && getComputedStyle(document.querySelector('#avatar')).display !== 'none'")
+        try await check("composer fills a narrow window", "(()=>{const r=document.querySelector('#composer').getBoundingClientRect();return r.width===innerWidth && r.height===innerHeight})()")
         web.setFrameSize(NSSize(width: 760, height: 600))
         try await check("Post stays below the writing area and inside the window", "(()=>{const p=document.querySelector('#post').getBoundingClientRect(),e=document.querySelector('#editor').getBoundingClientRect();return p.top > e.bottom && p.right <= innerWidth && p.bottom <= innerHeight})()")
         try await check("styling preserves the original editor and upload input parents", "document.querySelector('#editor').parentElement.dataset.testid === 'tweetTextarea_0RichTextInputContainer' && document.querySelector('#file').parentElement.dataset.testid === 'toolBar'")
-        try await check("compact wrappers retain measurable geometry", "(()=>{const r=document.querySelector('#writingHost').getBoundingClientRect();return r.width>0 && r.height>0})()")
+        try await check("wrappers retain measurable geometry", "(()=>{const r=document.querySelector('#writingHost').getBoundingClientRect();return r.width>0 && r.height>0})()")
         try await js("const media=document.createElement('div');media.dataset.testid='attachments';media.id='preview';media.textContent='Chart attachment';document.querySelector('#writingHost').appendChild(media);void 0")
         try await Task.sleep(for: .milliseconds(50))
         try await check("new media previews remain visible after layout changes", "getComputedStyle(document.querySelector('#preview')).display !== 'none' && document.querySelector('#preview').getBoundingClientRect().height > 0")
         try await js("const next=document.createElement('div');next.id='thread';next.dataset.testid='tweetTextarea_1';next.contentEditable='true';next.textContent='Second post';document.querySelector('#writingHost').appendChild(next);void 0")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("expanded authoring falls back without hiding additional editors", "!document.querySelector('#composer').hasAttribute('data-mb-designed') && getComputedStyle(document.querySelector('#thread')).visibility === 'visible' && document.querySelector('#thread').getBoundingClientRect().height > 0")
+        try await check("additional thread editors stay visible", "getComputedStyle(document.querySelector('#thread')).visibility === 'visible' && document.querySelector('#thread').getBoundingClientRect().height > 0")
         try await js("document.querySelector('#thread').remove();document.querySelector('#preview').remove();void 0")
         try await js("const poll=document.createElement('input');poll.id='poll';poll.value='First option';document.querySelector('#writingHost').appendChild(poll);void 0")
         try await Task.sleep(for: .milliseconds(50))
@@ -164,7 +154,9 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
         await load("<main><div id='standalone'><nav><button data-testid='app-bar-back' id='back'>Back</button><button data-testid='tweetButton'>Post</button></nav><div data-testid='UserAvatar-Container-writer'></div><div data-testid='tweetTextarea_0' contenteditable='true' id='editor'></div><nav role='navigation'><input type='file'></nav></div></main>", path: "/compose/post")
         try await check("standalone composer with navigation toolbar is visible", "getComputedStyle(document.querySelector('#editor')).visibility === 'visible'")
-        try await check("standalone back button stays hidden", "getComputedStyle(document.querySelector('#back')).display === 'none'")
+        try await check("standalone back button stays hidden", "getComputedStyle(document.querySelector('#back')).visibility === 'hidden'")
+        try await exerciseSkin()
+        try await exerciseThreadsAndDrafts()
         try await exerciseAuthoring()
         try await checkAccountStores()
     }
@@ -177,8 +169,8 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             getSelection().removeAllRanges();getSelection().addRange(range);void 0
             """)
         try await Task.sleep(for: .milliseconds(50))
-        try await js("document.querySelector('[data-mb-part=identity]').focus();window.__minimalBirdFocusEditor()")
-        try await check("returning from account menu restores editor and caret", "document.activeElement.id==='editor' && getSelection().anchorOffset===2")
+        try await js("document.activeElement.blur();window.__minimalBirdFocusEditor()")
+        try await check("returning from a native menu restores editor and caret", "document.activeElement.id==='editor' && getSelection().anchorOffset===2")
         try await js("document.execCommand('insertText',false,'!')")
         try await check("typing resumes at the saved caret", "document.querySelector('#editor').textContent==='He!llo'")
         try await js("""
@@ -188,7 +180,9 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("restoring focus does not steal a poll input", "window.__minimalBirdFocusEditor() && document.activeElement.id==='focusChoice'")
         try await js("document.querySelector('#focusChoice').remove();document.querySelector('#editor').textContent='';void 0")
         try await Task.sleep(for: .milliseconds(50))
-        try await js("document.querySelector('[data-mb-part=identity]').focus();document.querySelector('[data-mb-part=writing]').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0}))")
+        try await js("document.querySelector('[data-testid=toolBar] button').focus();window.__minimalBirdFocusEditor()")
+        try await check("focus restoration leaves a composer control the person is using", "document.activeElement.getAttribute('aria-label')==='Add photos or video'")
+        try await js("document.querySelector('#writingHost').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0}))")
         try await check("blank writing space restores editable focus", "document.activeElement.id==='editor'")
         try await js("""
             const unsolicited=document.createElement('div');unsolicited.role='dialog';unsolicited.id='unsolicited';
@@ -242,6 +236,109 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await Task.sleep(for: .milliseconds(50))
         try await check("Escape exits a focusable popup group", "!document.querySelector('#groupPopup') && window.__minimalBirdFocusEditor()")
         try await js("document.querySelectorAll('#popupTrigger,#unsolicited,#badPopup').forEach(n=>n.remove());void 0")
+    }
+
+    private func lastDraft() -> [String: Any]? {
+        messages.last(where: { $0["state"] as? String == "draft" })
+    }
+
+    private func exerciseSkin() async throws {
+        await load("""
+            <main id="background"><article data-testid="tweet">Feed</article></main>
+            <div role="dialog" id="composer" style="background:rgb(255,255,255)">
+              <div id="panel" style="background:rgb(255,255,255);border:1px solid rgb(207,217,222);color:rgb(15,20,25)">
+                <button id="audience" style="color:rgb(29,155,240);border:1px solid rgb(207,217,222)">Everyone</button>
+                <div data-testid="tweetTextarea_0" contenteditable="true" id="editor" style="font-family:Georgia;color:rgb(15,20,25)">Read <span id="link" style="color:rgb(29,155,240)">example.com</span></div>
+                <div id="secondary" style="color:rgb(83,100,113)">Everyone can reply</div>
+                <div id="rule" style="width:2px;height:40px;background:rgb(207,217,222)"></div>
+              </div>
+              <div data-testid="toolBar"><button id="tool" style="color:rgb(29,155,240)">Media</button>
+                <div id="remove" style="background:rgba(15,20,25,0.75);color:rgb(255,255,255)">Remove</div></div>
+              <button data-testid="tweetButton" id="post" style="background:rgb(29,155,240);color:rgb(255,255,255)">Post</button>
+            </div>
+            """, path: "/compose/post")
+        try await Task.sleep(for: .milliseconds(50))
+        let accent = "rgb(184, 73, 46)", paper = "rgb(250, 249, 246)", line = "rgb(230, 228, 220)"
+        try await check("X's accent becomes the app accent for Post and links", "getComputedStyle(document.querySelector('#post')).backgroundColor==='\(accent)' && getComputedStyle(document.querySelector('#link')).color==='\(accent)' && getComputedStyle(document.querySelector('#audience')).color==='\(accent)'")
+        try await check("white panels take the warm page color with hairline borders", "getComputedStyle(document.querySelector('#panel')).backgroundColor==='\(paper)' && getComputedStyle(document.querySelector('#panel')).borderTopColor==='\(line)'")
+        try await check("thread connectors become hairlines", "getComputedStyle(document.querySelector('#rule')).backgroundColor==='\(line)'")
+        try await check("text uses the app's ink and muted tones", "getComputedStyle(document.querySelector('#editor')).color==='rgb(43, 50, 48)' && getComputedStyle(document.querySelector('#secondary')).color==='rgb(128, 132, 124)'")
+        try await check("toolbar icons stay quiet", "getComputedStyle(document.querySelector('#tool')).color==='rgb(128, 132, 124)'")
+        try await check("one system typeface across the composer", "getComputedStyle(document.querySelector('#editor')).fontFamily.includes('apple-system') && getComputedStyle(document.querySelector('#post')).fontFamily.includes('apple-system')")
+        try await check("overlay controls on media keep their contrast", "getComputedStyle(document.querySelector('#remove')).backgroundColor==='rgba(15, 20, 25, 0.75)' && getComputedStyle(document.querySelector('#remove')).color==='rgb(255, 255, 255)'")
+        try await js("document.querySelector('#post').style.backgroundColor='rgb(26,140,216)';void 0")
+        try await Task.sleep(for: .milliseconds(50))
+        try await check("restyled controls are measured again", "getComputedStyle(document.querySelector('#post')).backgroundColor==='\(accent)'")
+    }
+
+    private func exerciseThreadsAndDrafts() async throws {
+        let thread = """
+            <main id="background"><article data-testid="tweet">Feed</article></main>
+            <div role="dialog" id="composer">
+              <div id="posts"><div data-testid="tweetTextarea_0" contenteditable="true" id="editor"></div></div>
+              <div data-testid="toolBar"><button id="media" aria-label="Add photos or video">Media</button>
+                <button data-testid="addButton" id="add" aria-label="Add post">+</button></div>
+              <button data-testid="tweetButton" id="post">Post</button>
+            </div>
+            <script>
+              let next = 1;
+              // Like X, add a post and focus it on a later tick.
+              document.querySelector('#add').onclick = () => {
+                const editor = document.createElement('div');
+                editor.dataset.testid = 'tweetTextarea_' + next++; editor.contentEditable = 'true'; editor.style.minHeight = '20px';
+                document.querySelector('#posts').appendChild(editor);
+                setTimeout(() => editor.focus(), 30);
+              };
+            </script>
+            """
+        await load(thread, path: "/compose/post")
+        try await js("const e=document.querySelector('#editor');e.focus();e.textContent='First post';e.dispatchEvent(new Event('input',{bubbles:true}))")
+        try await Task.sleep(for: .milliseconds(50))
+        if lastDraft()?["posts"] as? [String] != ["First post"] || lastDraft()?["extras"] as? Bool != false {
+            failures += 1; print("FAIL: composer text is reported for local drafts")
+        } else { print("PASS: composer text is reported for local drafts") }
+        try await js("document.querySelector('#add').focus();document.querySelector('#add').click()")
+        try await Task.sleep(for: .milliseconds(10))
+        try await js("window.__minimalBirdFocusEditor()") // A native focus restore while X is still adding the post.
+        try await Task.sleep(for: .milliseconds(80))
+        try await js("window.__minimalBirdFocusEditor()")
+        try await check("a newly added thread post keeps keyboard focus", "document.activeElement.dataset.testid==='tweetTextarea_1'")
+        try await js("const e=document.activeElement;e.textContent='Second post';e.dispatchEvent(new Event('input',{bubbles:true}))")
+        try await Task.sleep(for: .milliseconds(50))
+        if lastDraft()?["posts"] as? [String] != ["First post", "Second post"] {
+            failures += 1; print("FAIL: every post of a thread is reported in order")
+        } else { print("PASS: every post of a thread is reported in order") }
+        try await js("document.querySelector('#editor').focus();document.querySelector('[data-testid=tweetTextarea_1]').focus()")
+        try await check("an earlier thread post can be focused again", "document.activeElement.dataset.testid==='tweetTextarea_1'")
+        let reload = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
+                                                       arguments: ["posts": ["Other"]], in: nil, contentWorld: .page) as? String
+        if reload != "reload" { failures += 1; print("FAIL: opening a draft over a thread asks for a fresh composer") }
+        else { print("PASS: opening a draft over a thread asks for a fresh composer") }
+
+        await load(thread, path: "/compose/post")
+        try await js("document.querySelector('#editor').textContent='Old text';document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}))")
+        try await Task.sleep(for: .milliseconds(50))
+        let outcome = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
+                                                        arguments: ["posts": ["Hello\nthere", "And a reply"]], in: nil, contentWorld: .page) as? String
+        if outcome != "ok" { failures += 1; print("FAIL: a saved thread is put back into X's editors (\(outcome ?? "nil"))") }
+        else { print("PASS: a saved thread is put back into X's editors") }
+        try await check("restored text replaces the old text", "(()=>{const e=[...document.querySelectorAll('[data-testid^=tweetTextarea_]')];return e.length===2 && e[0].innerText.replace(/\\s+/g,' ').trim()==='Hello there' && e[1].innerText.trim()==='And a reply'})()")
+        try await Task.sleep(for: .milliseconds(50))
+        if lastDraft()?["posts"] as? [String] != ["Hello\nthere", "And a reply"] {
+            failures += 1; print("FAIL: restored text is reported once insertion finishes")
+        } else { print("PASS: restored text is reported once insertion finishes") }
+
+        // An editor with its own paste handling (as X's does) must not get the text twice.
+        await load(thread, path: "/compose/post")
+        try await js("""
+            document.querySelector('#editor').addEventListener('paste', event => {
+              event.preventDefault(); window.fixturePastes = (window.fixturePastes || 0) + 1;
+              event.currentTarget.textContent = event.clipboardData.getData('text/plain');
+            });void 0
+            """)
+        let pasted = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
+                                                       arguments: ["posts": ["Only once"]], in: nil, contentWorld: .page) as? String
+        try await check("editors that handle paste receive the text exactly once", "\(pasted == "ok") && window.fixturePastes===1 && document.querySelector('#editor').textContent==='Only once'")
     }
 
     private func exerciseAuthoring() async throws {
@@ -309,7 +406,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("attachment pixels decode and the thumbnail has visible geometry", "(()=>{const img=document.querySelector('#uploaded img');return img.naturalWidth===64 && img.naturalHeight===40 && img.getBoundingClientRect().height>0 && getComputedStyle(img).visibility==='visible'})()")
         try await js("document.querySelector('#removeImage').click()")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("image can be removed and compact writing restored", "!document.querySelector('#uploaded') && document.querySelector('#externalFile').files.length===0 && document.querySelector('#composer').hasAttribute('data-mb-designed')")
+        try await check("image can be removed", "!document.querySelector('#uploaded') && document.querySelector('#externalFile').files.length===0")
         if messages.last(where: { $0["state"] as? String == "draft" })?["dirty"] as? Bool != false {
             failures += 1; print("FAIL: removing image clears the attachment-only draft")
         } else { print("PASS: removing image clears the attachment-only draft") }
@@ -359,10 +456,10 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await js("document.querySelector('#removePoll').click()")
         try await js("document.querySelector('#editor').textContent='Keep my text';document.querySelector('#pollButton').click()")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("poll exit stays visible even with contenteditable choices", "(()=>{const b=document.querySelector('#removePoll');return b.getBoundingClientRect().height>0 && getComputedStyle(b).visibility==='visible' && !document.querySelector('#composer').hasAttribute('data-mb-designed')})()")
+        try await check("poll exit stays visible even with contenteditable choices", "(()=>{const b=document.querySelector('#removePoll');return b.getBoundingClientRect().height>0 && getComputedStyle(b).visibility==='visible'})()")
         try await js("document.querySelector('#removePoll').click()")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("removing a poll preserves text and returns to compact writing", "!document.querySelector('#pollForm') && document.querySelector('#editor').textContent==='Keep my text' && document.querySelector('#composer').hasAttribute('data-mb-designed') && getComputedStyle(document.querySelector('#background')).visibility==='hidden'")
+        try await check("removing a poll preserves text", "!document.querySelector('#pollForm') && document.querySelector('#editor').textContent==='Keep my text' && getComputedStyle(document.querySelector('#background')).visibility==='hidden'")
         try await js("""
             document.querySelector('#editor').textContent='';
             const photo=document.createElement('div');photo.id='backgroundPhoto';photo.style.width='160px';photo.style.height='100px';
@@ -371,7 +468,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await Task.sleep(for: .milliseconds(50))
         try await js("document.querySelector('#backgroundPhoto').style.backgroundImage=`url(${URL.createObjectURL(new Blob([window.fixtureBytes],{type:'image/png'}))})`;void 0")
         try await Task.sleep(for: .milliseconds(50))
-        try await check("background-image preview without buttons survives a late style change", "(()=>{const p=document.querySelector('#backgroundPhoto');return getComputedStyle(p).backgroundImage!=='none' && p.getBoundingClientRect().height===100 && getComputedStyle(p).visibility==='visible' && !document.querySelector('#composer').hasAttribute('data-mb-designed')})()")
+        try await check("background-image preview without buttons survives a late style change", "(()=>{const p=document.querySelector('#backgroundPhoto');return getComputedStyle(p).backgroundImage!=='none' && p.getBoundingClientRect().height===100 && getComputedStyle(p).visibility==='visible'})()")
         if messages.last(where: { $0["state"] as? String == "draft" })?["dirty"] as? Bool != true {
             failures += 1; print("FAIL: background-image attachments participate in draft protection")
         } else { print("PASS: background-image attachments participate in draft protection") }

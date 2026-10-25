@@ -6,12 +6,14 @@ import WebKit
 import UniformTypeIdentifiers
 import FocusCore
 
+/// Shared with the web skin in focus.js (the --mb-* variables).
 enum Palette {
-    static let paper = NSColor(calibratedRed: 0.98, green: 0.975, blue: 0.965, alpha: 1)
-    static let ink = NSColor(calibratedRed: 0.18, green: 0.21, blue: 0.20, alpha: 1)
-    static let muted = NSColor(calibratedRed: 0.47, green: 0.49, blue: 0.46, alpha: 1)
-    static let accent = NSColor(calibratedRed: 0.72, green: 0.29, blue: 0.18, alpha: 1)
-    static let line = NSColor(calibratedRed: 0.88, green: 0.88, blue: 0.85, alpha: 1)
+    static let paper = NSColor(srgbRed: 0.980, green: 0.976, blue: 0.965, alpha: 1)
+    static let ink = NSColor(srgbRed: 0.169, green: 0.196, blue: 0.188, alpha: 1)
+    static let muted = NSColor(srgbRed: 0.502, green: 0.518, blue: 0.486, alpha: 1)
+    static let accent = NSColor(srgbRed: 0.722, green: 0.286, blue: 0.180, alpha: 1)
+    static let line = NSColor(srgbRed: 0.902, green: 0.894, blue: 0.863, alpha: 1)
+    static let hover = NSColor(srgbRed: 0.169, green: 0.196, blue: 0.188, alpha: 0.05)
 }
 
 @MainActor
@@ -23,25 +25,36 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     private let coverIcon = NSImageView()
     private let coverButton = NSButton(title: "", target: nil, action: nil)
     private let spinner = NSProgressIndicator()
-    private let status = NSTextField(labelWithString: "")
+    private var draftsPanel: DraftsPanel!
     private var timeout: Timer?
     private var state = "loading"
     private var draft = false
+    private var unsavedExtras = false
     private var demo = false
     private var redirects = 0
     private var lastRedirect = Date.distantPast
     private var openedAt = Date()
     private var warmOpening = false
+    private var lastKeyRecovery = Date.distantPast
     private let dataStore: WKWebsiteDataStore
-    var accountMenu: (() -> NSMenu)?
+    private let drafts: DraftStore
+    /// The saved draft the composer's text belongs to.
+    private var currentDraftID: UUID?
+    /// Whether this composer has shown text, so a cleared editor deletes its draft
+    /// but a freshly loaded, still-empty composer never does.
+    private var composerHadText = false
+    private var pendingDraft: Draft?
+    private var restoringDraft = false
+    private var persistTimer: Timer?
     var accountChanged: ((String) -> Void)?
 
-    init(dataStore: WKWebsiteDataStore) {
+    init(dataStore: WKWebsiteDataStore, drafts: DraftStore) {
         self.dataStore = dataStore
+        self.drafts = drafts
         super.init(nibName: nil, bundle: nil)
     }
 
-    required init?(coder: NSCoder) { fatalError("Use init(dataStore:)") }
+    required init?(coder: NSCoder) { fatalError("Use init(dataStore:drafts:)") }
 
     override func loadView() {
         view = NSView()
@@ -72,81 +85,73 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         webView.underPageBackgroundColor = Palette.paper
         webView.isHidden = true
 
-        let more = NSButton(image: NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Options")!, target: self, action: #selector(showOptions(_:)))
-        more.isBordered = false
-        more.refusesFirstResponder = true
-        more.contentTintColor = Palette.muted
+        draftsPanel = DraftsPanel(expanded: UserDefaults.standard.bool(forKey: "DraftsExpanded"))
+        draftsPanel.onToggle = { [weak self] expanded in
+            UserDefaults.standard.set(expanded, forKey: "DraftsExpanded")
+            self?.restoreEditorFocus()
+        }
+        draftsPanel.onOpen = { [weak self] id in self?.openDraft(id) }
+        draftsPanel.onDelete = { [weak self] id in self?.deleteDraft(id) }
+
         cover.wantsLayer = true
         cover.layer?.backgroundColor = Palette.paper.cgColor
         coverIcon.contentTintColor = Palette.accent
-        coverIcon.symbolConfiguration = .init(pointSize: 28, weight: .light)
-        coverTitle.font = .systemFont(ofSize: 21, weight: .medium)
+        coverIcon.symbolConfiguration = .init(pointSize: 26, weight: .light)
+        coverTitle.font = .systemFont(ofSize: 20, weight: .semibold)
         coverTitle.textColor = Palette.ink
         coverTitle.alignment = .center
-        coverDetail.font = .systemFont(ofSize: 12)
+        coverDetail.font = .systemFont(ofSize: 13)
         coverDetail.textColor = Palette.muted
         coverDetail.alignment = .center
         coverDetail.maximumNumberOfLines = 5
         coverButton.target = self
         coverButton.action = #selector(coverAction)
-        coverButton.bezelStyle = .rounded
-        coverButton.controlSize = .regular
-        coverButton.contentTintColor = Palette.accent
+        coverButton.bezelStyle = .push
+        coverButton.controlSize = .large
+        coverButton.bezelColor = Palette.accent
         spinner.style = .spinning
         spinner.controlSize = .small
         let coverStack = NSStackView(views: [coverIcon, coverTitle, coverDetail, spinner, coverButton])
         coverStack.orientation = .vertical
         coverStack.alignment = .centerX
-        coverStack.spacing = 14
+        coverStack.spacing = 12
+        coverStack.setCustomSpacing(6, after: coverTitle)
+        coverStack.setCustomSpacing(20, after: coverDetail)
         cover.addSubview(coverStack)
-        status.font = .systemFont(ofSize: 10)
-        status.textColor = Palette.muted
-        status.alignment = .center
-        status.lineBreakMode = .byTruncatingTail
-        status.stringValue = ""
-        for child in [webView!, cover, status, more] {
+        for child in [webView!, cover, draftsPanel!] {
             child.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(child)
         }
         coverStack.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            more.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 30),
-            more.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -22),
-            more.widthAnchor.constraint(equalToConstant: 24),
-            more.heightAnchor.constraint(equalToConstant: 24),
             webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
+            webView.bottomAnchor.constraint(equalTo: draftsPanel.topAnchor),
+            draftsPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            draftsPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            draftsPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             cover.topAnchor.constraint(equalTo: webView.topAnchor),
             cover.leadingAnchor.constraint(equalTo: webView.leadingAnchor),
             cover.trailingAnchor.constraint(equalTo: webView.trailingAnchor),
             cover.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
             coverStack.centerXAnchor.constraint(equalTo: cover.centerXAnchor),
-            coverStack.centerYAnchor.constraint(equalTo: cover.centerYAnchor, constant: -12),
+            coverStack.centerYAnchor.constraint(equalTo: cover.centerYAnchor, constant: -16),
             coverStack.widthAnchor.constraint(equalTo: cover.widthAnchor, constant: -64),
-            coverDetail.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
-            coverIcon.heightAnchor.constraint(equalToConstant: 38),
-            status.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            status.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
-            status.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -2)
+            coverDetail.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
+            coverIcon.heightAnchor.constraint(equalToConstant: 36)
         ])
+        refreshDrafts()
     }
 
-    @objc private func showOptions(_ sender: NSButton) {
-        let menu = NSMenu()
-        if let accounts = accountMenu?() {
-            let item = NSMenuItem(title: "Switch account", action: nil, keyEquivalent: "")
-            item.submenu = accounts
-            menu.addItem(item)
-            menu.addItem(.separator())
-        }
-        for (title, action) in [("New post", #selector(newPost)), ("Reload X", #selector(reloadPage)), ("Sign out…", #selector(signOut))] {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-        }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    // WebKit sends key events the page did not mark as handled back up the
+    // responder chain. X's editor inserts typed text itself, so WebKit reports
+    // ordinary keystrokes as unhandled; without this, NSWindow answers each one
+    // with the system alert sound. If focus had drifted away from the editor,
+    // the first stray key brings it back.
+    override func keyDown(with event: NSEvent) {
+        guard !event.modifierFlags.contains(.command), Date().timeIntervalSince(lastKeyRecovery) > 1 else { return }
+        lastKeyRecovery = Date()
         restoreEditorFocus()
     }
 
@@ -154,7 +159,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         self.demo = demo
         _ = view
         if demo {
-            showCover(title: "A space to write.", detail: "Sign in to X to start.", symbol: "square.and.pencil", button: "Open X")
+            showCover(title: "A quiet place to write.", detail: "Sign in to X to start. Your feed stays out of sight.", symbol: "square.and.pencil", button: "Open X")
         } else {
             loadComposer()
         }
@@ -165,6 +170,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         cover.isHidden = false
         coverTitle.stringValue = title
         coverDetail.stringValue = detail
+        coverDetail.isHidden = detail.isEmpty
         coverIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         coverButton.title = button ?? "Try again"
         coverButton.isHidden = button == nil
@@ -172,8 +178,13 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         if loading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
     }
 
+    /// Loads a fresh composer document. Its text is either already saved in
+    /// Drafts or waiting in `pendingDraft`, so it never inherits a draft.
     private func loadComposer() {
         draft = false
+        unsavedExtras = false
+        composerHadText = false
+        currentDraftID = nil
         state = "loading"
         openedAt = Date()
         warmOpening = false
@@ -196,7 +207,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
 
     @objc private func coverAction() {
         demo = false
-        newPost()
+        if state == "error" { reloadKeepingText() } else { newPost() }
     }
 
     func resume() {
@@ -218,7 +229,14 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
 
     @objc func newPost() {
         guard confirmDiscard() else { return }
-        if draft { loadComposer(); return }
+        if draft {
+            // The text is already in Drafts; start a clean composer.
+            if currentDraftID != nil { draftsPanel.flash("Saved to Drafts") }
+            currentDraftID = nil
+            pendingDraft = nil
+            loadComposer()
+            return
+        }
         redirects = 0
         if ["finished", "composer", "blocked"].contains(state) {
             openedAt = Date()
@@ -235,17 +253,34 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
 
     @objc func reloadPage() {
         guard confirmDiscard() else { return }
+        reloadKeepingText()
+    }
+
+    /// Reloads X and puts the composer's saved text back afterwards.
+    private func reloadKeepingText() {
         redirects = 0
+        if pendingDraft == nil, let id = currentDraftID, let saved = drafts.draft(id) { pendingDraft = saved }
+        currentDraftID = nil
         loadComposer()
     }
 
+    @objc func toggleDrafts() {
+        draftsPanel.setExpanded(!draftsPanel.isExpanded)
+    }
+
+    var draftsExpanded: Bool { draftsPanel?.isExpanded ?? false }
+
+    /// Text is kept in Drafts automatically. Only attachments and polls, which
+    /// a text draft cannot hold, need confirmation before they are dropped.
     func confirmDiscard() -> Bool {
-        guard draft else { return true }
+        guard draft, unsavedExtras else { return true }
         let alert = NSAlert()
-        alert.messageText = "Leave this draft?"
-        alert.informativeText = "Text or attachments in the composer may be lost."
+        alert.messageText = "Remove attachments?"
+        alert.informativeText = drafts.draft(currentDraftID ?? UUID()) != nil
+            ? "Your text is saved in Drafts, but attached media and polls can’t be kept and will be removed."
+            : "Attached media and polls can’t be kept in Drafts and will be removed."
         alert.addButton(withTitle: "Keep writing")
-        alert.addButton(withTitle: "Discard and continue")
+        alert.addButton(withTitle: "Remove and continue")
         let discard = alert.runModal() == .alertSecondButtonReturn
         if !discard { restoreEditorFocus() }
         return discard
@@ -255,7 +290,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         guard confirmDiscard() else { return }
         let alert = NSAlert()
         alert.messageText = "Sign out of this app?"
-        alert.informativeText = "This removes Minimal Bird’s cookies and website data. Your other browsers stay signed in."
+        alert.informativeText = "This removes Minimal Bird’s cookies and website data for this account. Your drafts stay on this Mac, and your other browsers stay signed in."
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Sign out")
         guard alert.runModal() == .alertSecondButtonReturn else { restoreEditorFocus(); return }
@@ -263,6 +298,8 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         webView.stopLoading()
         webView.loadHTMLString("", baseURL: nil)
         draft = false
+        currentDraftID = nil
+        pendingDraft = nil
         state = "signingOut"
         showCover(title: "Clearing your session…", detail: "", symbol: "person.crop.circle", loading: true)
         webView.configuration.websiteDataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { [weak self] in
@@ -270,6 +307,94 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             self?.loadComposer()
         }
     }
+
+    // MARK: Drafts
+
+    private func refreshDrafts() {
+        draftsPanel?.update(drafts: drafts.drafts, current: currentDraftID)
+    }
+
+    private func schedulePersist() {
+        persistTimer?.invalidate()
+        persistTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.drafts.persist() }
+        }
+    }
+
+    func persistDrafts() {
+        persistTimer?.invalidate()
+        drafts.persist()
+    }
+
+    private func autosave(_ posts: [String]) {
+        guard !restoringDraft else { return }
+        if Draft.hasText(posts) {
+            currentDraftID = drafts.save(posts, id: currentDraftID)
+            composerHadText = true
+        } else if composerHadText {
+            // The person cleared the composer; the draft goes with it.
+            if let id = currentDraftID { drafts.remove(id) }
+            currentDraftID = nil
+            composerHadText = false
+        } else { return }
+        schedulePersist()
+        refreshDrafts()
+    }
+
+    private func deleteDraft(_ id: UUID) {
+        guard id != currentDraftID else { return }
+        drafts.remove(id)
+        persistDrafts()
+        refreshDrafts()
+        restoreEditorFocus()
+    }
+
+    private func openDraft(_ id: UUID) {
+        guard id != currentDraftID, let saved = drafts.draft(id), !restoringDraft, confirmDiscard() else { return }
+        pendingDraft = saved
+        if state == "composer" && !unsavedExtras {
+            insertPendingDraft()
+        } else if state != "loading" || demo {
+            demo = false
+            currentDraftID = nil
+            loadComposer()
+        } // While loading, the draft is inserted once the composer appears.
+    }
+
+    /// Puts a saved draft into X's editor. The composer's previous text stays
+    /// in its own draft; edits from here on update the opened one.
+    private func insertPendingDraft() {
+        guard let saved = pendingDraft, state == "composer", !restoringDraft else { return }
+        restoringDraft = true
+        currentDraftID = saved.id
+        composerHadText = false
+        refreshDrafts()
+        webView.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
+                                    arguments: ["posts": saved.posts], in: nil, in: .page) { [weak self] result in
+            guard let self else { return }
+            self.restoringDraft = false
+            let outcome = (try? result.get()) as? String ?? "failed"
+            switch outcome {
+            case "ok", "partial":
+                self.pendingDraft = nil
+                self.composerHadText = true
+                self.draft = true
+                self.draftsPanel.flash(outcome == "ok" ? "Draft opened" : "Opened the first posts; add the rest with +")
+                self.restoreEditorFocus()
+            case "reload":
+                // The composer holds a thread; start from a clean one, then insert.
+                self.currentDraftID = nil
+                self.loadComposer()
+            default:
+                self.pendingDraft = nil
+                self.currentDraftID = nil
+                self.draftsPanel.flash("Couldn’t open the draft here. It’s still in Drafts.")
+            }
+            self.refreshDrafts()
+        }
+    }
+
+    // MARK: Messages from focus.js
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame,
@@ -279,17 +404,14 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
               state != "signingOut" else { return }
         if next == "draft" {
             draft = body["dirty"] as? Bool ?? false
+            unsavedExtras = body["extras"] as? Bool ?? false
+            if let posts = body["posts"] as? [String], posts.count <= 50 { autosave(posts) }
             return
         }
         if next == "diagnostic" {
             if CommandLine.arguments.contains("--diagnose"), let details = body["details"] as? String {
                 print("Authoring: \(details)"); fflush(stdout)
             }
-            return
-        }
-        if next == "accounts" {
-            accountMenu?().popUp(positioning: nil, at: NSPoint(x: 28, y: view.bounds.height - view.safeAreaInsets.top - 66), in: view)
-            restoreEditorFocus()
             return
         }
         if next == "composer", let handle = body["handle"] as? String,
@@ -304,15 +426,21 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             timeout?.invalidate()
             cover.isHidden = true
             webView.isHidden = false
-            status.stringValue = next == "login" ? "Use your X username and password." : ""
+            draftsPanel.status = next == "login" ? "Sign in with your X username and password." : ""
             if next == "composer", previousState != "composer" {
-                restoreEditorFocus()
+                if pendingDraft != nil { insertPendingDraft() } else { restoreEditorFocus() }
             }
         case "finished":
             timeout?.invalidate()
+            // X closed the composer after Post; the posted text leaves Drafts.
+            if let id = currentDraftID { drafts.remove(id); persistDrafts() }
+            currentDraftID = nil
+            composerHadText = false
             draft = false
-            showCover(title: "Back to your day.", detail: "", symbol: "checkmark", button: "New post")
-            status.stringValue = ""
+            unsavedExtras = false
+            refreshDrafts()
+            showCover(title: "Posted. Back to your day.", detail: "X took it from here.", symbol: "checkmark.circle", button: "New post")
+            draftsPanel.status = ""
         case "needsComposer":
             redirectToComposer()
         case "blocked":
@@ -335,6 +463,8 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         loadComposer()
     }
 
+    // MARK: WebKit
+
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if CommandLine.arguments.contains("--diagnose"), let url = navigationAction.request.url {
             // Never log query strings, fragments, credentials, or form contents.
@@ -349,7 +479,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         if url.absoluteString == "about:blank" { decisionHandler(.allow); return }
         let destination = NavigationPolicy.destination(for: url)
         guard destination != .blocked else {
-            status.stringValue = "Only posting is available in Minimal Bird."
+            draftsPanel.flash("Only posting is available in Minimal Bird.")
             decisionHandler(.cancel)
             return
         }
@@ -384,13 +514,17 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(error) }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         state = "error"
-        showCover(title: "Your writing space paused.", detail: "The web process stopped. Reload to reconnect to X.", symbol: "arrow.clockwise", button: "Reload")
+        draft = false
+        unsavedExtras = false
+        showCover(title: "Your writing space paused.", detail: "The web process stopped. Your text is safe in Drafts; reload to reconnect to X.", symbol: "arrow.clockwise", button: "Reload")
     }
 
     private func failed(_ error: Error) {
         guard (error as NSError).code != NSURLErrorCancelled else { return }
         timeout?.invalidate()
         state = "error"
+        draft = false
+        unsavedExtras = false
         showCover(title: "Couldn’t reach X.", detail: error.localizedDescription, symbol: "wifi.slash", button: "Try again")
     }
 

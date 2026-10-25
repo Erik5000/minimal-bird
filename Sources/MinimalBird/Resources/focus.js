@@ -21,11 +21,8 @@
   let internalNavigation = false;
   let lastDraft = null;
   let pendingMedia = false;
+  let restoring = false;
   const inertNodes = new Set();
-  const identities = new WeakMap();
-  const layouts = new WeakMap();
-  const fallbackAvatars = new WeakMap();
-  let avatarURL = null;
   let authoringClick = false;
   const authorizedUploads = new WeakSet();
   const popoverSelector = '[role="dialog"], [role="menu"], [role="listbox"], [role="group"][tabindex="0"]';
@@ -36,27 +33,49 @@
   let lastEditor = null;
   let lastSelection = null;
 
+  function post(message) {
+    window.webkit?.messageHandlers?.focus?.postMessage(message);
+  }
+
   function editable(node) {
     return node instanceof Element && (node.isContentEditable
       || node.matches('textarea, input:not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="radio"]):not([type="checkbox"])'));
   }
 
-  function focusEditor() {
-    if (!surface?.isConnected || !surface.querySelector(editorSelector) || popovers.size) return false;
-    if (surface.contains(document.activeElement) && editable(document.activeElement)) return true;
-    const editor = lastEditor?.isConnected && surface.contains(lastEditor) ? lastEditor : surface.querySelector(editorSelector);
-    if (!editor || editor.closest('[inert]')) return false;
+  /// Top-level post editors in document order. A thread has one per post.
+  function editorsIn(root) {
+    const all = [...root.querySelectorAll(editorSelector)];
+    return all.filter(node => !all.some(other => other !== node && other.contains(node)));
+  }
+
+  /// Restores keyboard focus to the editor after native menus, sheets, and
+  /// popups. It never takes focus from a control the person is using inside
+  /// the composer, such as a newly added thread post, a poll choice or a button.
+  function focusEditor(force = false, preferred = null) {
+    if (!surface?.isConnected || popovers.size) return false;
+    const editors = editorsIn(surface);
+    if (!editors.length) return false;
+    const active = document.activeElement;
+    if (surface.contains(active) && active !== surface) {
+      if (editable(active)) return true;
+      if (!force) return false;
+    }
+    const editor = preferred && editors.includes(preferred) ? preferred
+      : lastEditor?.isConnected && editors.includes(lastEditor) ? lastEditor : editors[0];
+    if (editor.closest('[inert]')) return false;
     editor.focus({ preventScroll: true });
-    if (lastSelection && editor.contains(lastSelection.commonAncestorContainer)) {
+    if (editor === lastEditor && lastSelection && editor.contains(lastSelection.commonAncestorContainer)) {
       const selection = getSelection();
       selection.removeAllRanges(); selection.addRange(lastSelection);
     }
     return document.activeElement === editor;
   }
-  window.__minimalBirdFocusEditor = focusEditor;
+  window.__minimalBirdFocusEditor = () => focusEditor();
 
   document.addEventListener('focusin', event => {
-    if (surface?.contains(event.target) && editable(event.target)) lastEditor = event.target;
+    if (!surface?.contains(event.target) || !editable(event.target)) return;
+    if (lastEditor !== event.target) lastSelection = null;
+    lastEditor = event.target;
   });
   document.addEventListener('selectionchange', () => {
     const selection = getSelection();
@@ -108,7 +127,7 @@
         target?.focus({ preventScroll: true });
       });
     }
-    if (hadPopover && !popovers.size && document.hasFocus()) queueMicrotask(focusEditor);
+    if (hadPopover && !popovers.size && document.hasFocus()) queueMicrotask(() => focusEditor());
   }
 
   function report(state, extra = {}) {
@@ -116,29 +135,46 @@
     const key = JSON.stringify(message);
     if (key === lastState) return;
     lastState = key;
-    window.webkit?.messageHandlers?.focus?.postMessage(message);
+    post(message);
   }
 
-  function updateDraft() {
-    if (!surface?.isConnected || !surface.querySelector(editorSelector)) return;
+  function postText(editor) {
+    return (editor.innerText || '').replace(/ /g, ' ').replace(/^\n+|\s+$/g, '');
+  }
+
+  /// Sends the composer's text to the native app, which keeps it as a local
+  /// draft. `extras` marks content a text draft cannot keep (media, polls).
+  function updateDraft(force = false) {
+    if (restoring || !surface?.isConnected) return;
+    const editors = editorsIn(surface);
+    if (!editors.length) return;
+    const posts = editors.map(postText);
     const attachments = hasAuthoringMedia(surface);
     const fileInputs = new Set([...surface.querySelectorAll('input[type="file"]'),
       ...[...document.querySelectorAll('input[type="file"][data-testid="fileInput"]')].filter(input => authorizedUploads.has(input))]);
     const selectedFiles = [...fileInputs].some(input => input.files?.length);
     if (attachments) pendingMedia = false;
-    const dirty = pendingMedia || attachments
-      || selectedFiles
+    const extras = pendingMedia || attachments || selectedFiles
       || [...surface.querySelectorAll('input:not([type="file"]):not([type="hidden"]), textarea')].some(input => input.value.trim().length > 0)
-      || [...surface.querySelectorAll('[contenteditable="true"]')].some(editor => editor.textContent.trim().length > 0);
-    if (dirty === lastDraft) return;
-    lastDraft = dirty;
-    window.webkit?.messageHandlers?.focus?.postMessage({ state: 'draft', dirty });
+      || [...surface.querySelectorAll('[contenteditable="true"]')].some(field => !editors.some(editor => editor === field
+        || editor.contains(field) || field.contains(editor)) && field.textContent.trim().length > 0);
+    const dirty = extras || posts.some(text => text.trim().length > 0);
+    const key = JSON.stringify([dirty, extras, posts]);
+    if (!force && key === lastDraft) return;
+    lastDraft = key;
+    post({ state: 'draft', dirty, extras, posts });
   }
 
   const style = document.createElement('style');
   style.id = 'minimal-bird-curtain';
   style.textContent = `
-    html { visibility: hidden !important; background: #faf9f6 !important; }
+    :root {
+      --mb-paper: #faf9f6; --mb-ink: #2b3230; --mb-muted: #80847c; --mb-faint: #a9aaa1;
+      --mb-line: #e6e4dc; --mb-accent: #b8492e; --mb-accent-hover: #a33f27;
+      --mb-tint: rgba(184, 73, 46, 0.09); --mb-accent-line: rgba(184, 73, 46, 0.38);
+      --mb-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    }
+    html { visibility: hidden !important; background: var(--mb-paper) !important; }
     body * { visibility: hidden !important; pointer-events: none !important; }
     [data-mb-surface], [data-mb-surface] *, [data-mb-popover], [data-mb-popover] * {
       visibility: visible !important; pointer-events: auto !important;
@@ -152,13 +188,13 @@
     }
     [data-mb-popover] {
       position: fixed !important; inset: auto !important; left: 50% !important;
-      bottom: 76px !important; transform: translateX(-50%) !important;
+      bottom: 64px !important; transform: translateX(-50%) !important;
       width: 360px !important; min-width: 0 !important;
-      max-width: calc(100vw - 48px) !important; box-sizing: border-box !important;
-      max-height: calc(100vh - 110px) !important; overflow: auto !important;
-      z-index: 100 !important; background: #faf9f6 !important;
-      border: 1px solid #e4e4dd !important; border-radius: 12px !important;
-      box-shadow: 0 8px 32px #30342e26 !important;
+      max-width: calc(100vw - 40px) !important; box-sizing: border-box !important;
+      max-height: calc(100vh - 96px) !important; overflow: auto !important;
+      z-index: 100 !important; background: var(--mb-paper) !important;
+      border: 1px solid var(--mb-line) !important; border-radius: 14px !important;
+      box-shadow: 0 1px 2px #2b32300f, 0 12px 36px #2b323024 !important;
     }
     [data-mb-hidden], [data-mb-hidden] *,
     [data-testid="sidebarColumn"], [data-testid="sidebarColumn"] *,
@@ -169,8 +205,9 @@
       visibility: hidden !important; pointer-events: none !important;
     }
     [data-mb-hidden] { display: none !important; }
-    [data-mb-surface] { box-shadow: none !important; }
-    html, body { background: #faf9f6 !important; }
+    /* Close/back keep their slot so X's header keeps Post where X put it. */
+    [data-mb-concealed], [data-mb-concealed] * { visibility: hidden !important; pointer-events: none !important; }
+    html, body { background: var(--mb-paper) !important; }
     html:has([data-mb-surface="composer"]),
     body:has([data-mb-surface="composer"]) { overflow: hidden !important; }
     [data-mb-surface="composer"] {
@@ -181,115 +218,59 @@
       height: 100% !important; max-height: none !important;
       margin: 0 !important; border: none !important;
       border-radius: 0 !important; overflow-y: auto !important;
-      background: #faf9f6 !important; padding: 24px 28px !important;
-      box-sizing: border-box !important;
+      background: var(--mb-paper) !important; padding: 4px 16px 16px !important;
+      box-sizing: border-box !important; box-shadow: none !important;
     }
-    [data-mb-layout="bridge"] {
-      display: grid !important; grid-template-columns: subgrid !important;
-      grid-template-rows: subgrid !important; grid-area: 1 / 1 / -1 / -1 !important;
-      position: static !important; width: auto !important; height: auto !important;
-      min-width: 0 !important; min-height: 0 !important; max-width: none !important;
-      max-height: none !important; margin: 0 !important; padding: 0 !important;
-      border: 0 !important; background: transparent !important; overflow: visible !important;
-      backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
-      filter: none !important; transform: none !important; will-change: auto !important;
-      contain: none !important; opacity: 1 !important; z-index: auto !important;
-      align-self: stretch !important; justify-self: stretch !important;
-      pointer-events: none !important;
+
+    /* One calm skin over whatever layout X renders: a single composer, a
+       thread, polls, link cards or media. Tones are measured from X's own
+       computed colors (see applyTones), so no layout or class name is assumed. */
+    [data-mb-surface="composer"], [data-mb-surface="composer"] *,
+    [data-mb-popover], [data-mb-popover] * {
+      font-family: var(--mb-font) !important;
+      -webkit-font-smoothing: antialiased;
     }
-    [data-mb-layout="omit"] { display: none !important; }
-    [data-mb-surface="composer"][data-mb-designed] {
-      display: grid !important;
-      grid-template-columns: 38px minmax(0, 1fr);
-      grid-template-rows: 38px minmax(110px, 1fr) auto 18px 40px;
-      gap: 16px 12px !important;
-      align-content: stretch !important;
+    [data-mb-surface="composer"] * { box-shadow: none !important; }
+    [data-mb-surface="composer"] ::selection { background: rgba(184, 73, 46, 0.16); }
+    [data-mb-surface] [data-mb-fg="ink"], [data-mb-popover] [data-mb-fg="ink"] { color: var(--mb-ink) !important; }
+    [data-mb-surface] [data-mb-fg="muted"], [data-mb-popover] [data-mb-fg="muted"] { color: var(--mb-muted) !important; }
+    [data-mb-surface] [data-mb-fg="accent"], [data-mb-popover] [data-mb-fg="accent"] { color: var(--mb-accent) !important; }
+    [data-mb-surface] [data-mb-bg="paper"], [data-mb-popover] [data-mb-bg="paper"] { background-color: var(--mb-paper) !important; }
+    [data-mb-surface] [data-mb-bg="line"], [data-mb-popover] [data-mb-bg="line"] { background-color: var(--mb-line) !important; }
+    [data-mb-surface] [data-mb-bg="accent"], [data-mb-popover] [data-mb-bg="accent"] { background-color: var(--mb-accent) !important; }
+    [data-mb-surface] [data-mb-bg="tint"], [data-mb-popover] [data-mb-bg="tint"] { background-color: var(--mb-tint) !important; }
+    [data-mb-surface] [data-mb-bd="line"], [data-mb-popover] [data-mb-bd="line"] { border-color: var(--mb-line) !important; }
+    [data-mb-surface] [data-mb-bd="accent"], [data-mb-popover] [data-mb-bd="accent"] { border-color: var(--mb-accent-line) !important; }
+    [data-mb-surface] [data-mb-stroke="accent"], [data-mb-popover] [data-mb-stroke="accent"] { stroke: var(--mb-accent) !important; }
+    [data-mb-surface] [data-mb-stroke="line"], [data-mb-popover] [data-mb-stroke="line"] { stroke: var(--mb-line) !important; }
+    [data-mb-surface] [data-mb-fill="accent"], [data-mb-popover] [data-mb-fill="accent"] { fill: var(--mb-accent) !important; }
+
+    /* Toolbar icons stay quiet; the accent is kept for Post, links and progress. */
+    [data-mb-surface="composer"] [data-testid="toolBar"] [data-mb-fg="accent"] { color: var(--mb-muted) !important; }
+    [data-mb-surface="composer"] [data-testid="toolBar"] [data-mb-fill="accent"] { fill: var(--mb-muted) !important; }
+    [data-mb-surface="composer"] [data-testid="toolBar"] [data-mb-bg="tint"] { background-color: rgba(43, 50, 48, 0.07) !important; }
+
+    [data-mb-surface="composer"] [data-testid^="tweetTextarea_"],
+    [data-mb-surface="composer"] .public-DraftEditorPlaceholder-root,
+    [data-mb-surface="composer"] .public-DraftEditorPlaceholder-inner {
+      font-size: 18px !important; line-height: 1.5 !important; letter-spacing: -0.01em !important;
     }
-    [data-mb-part="avatar"] {
-      display: block !important; flex-shrink: 0 !important;
-      grid-area: 1 / 1 !important; width: 36px !important;
-      height: 36px !important; min-width: 0 !important;
-      margin: 0 !important; align-self: center !important;
-      object-fit: cover !important; border-radius: 50% !important;
+    [data-mb-surface="composer"] .public-DraftEditorPlaceholder-root,
+    [data-mb-surface="composer"] .public-DraftEditorPlaceholder-inner { color: var(--mb-faint) !important; }
+    [data-mb-surface="composer"] [contenteditable="true"] { caret-color: var(--mb-accent); }
+    [data-mb-surface="composer"] [data-testid="tweetButton"],
+    [data-mb-surface="composer"] [data-testid="tweetButtonInline"] {
+      border-radius: 999px !important; border-color: transparent !important;
+      transition: background-color 120ms ease, opacity 120ms ease;
     }
-    [data-mb-part="avatar"] div, [data-mb-part="avatar"] a {
-      display: block !important; width: 100% !important; height: 100% !important;
-      min-width: 0 !important; min-height: 0 !important;
-    }
-    [data-mb-part="avatar"] img {
-      display: block !important; width: 100% !important; height: 100% !important;
-      object-fit: cover !important; border-radius: 50% !important;
-    }
-    [data-mb-part="identity"] {
-      grid-area: 1 / 2 !important; align-self: center;
-      padding-right: 28px; color: #33372f !important;
-      font: 600 13px -apple-system, BlinkMacSystemFont, sans-serif;
-      line-height: 20px; cursor: pointer;
-    }
-    [data-mb-part="identity"]:focus-visible { outline: 2px solid #b8492e; outline-offset: 4px; border-radius: 3px; }
-    [data-mb-part="identity"] small {
-      display: block; color: #97978e !important; font-size: 11px; font-weight: 400;
-    }
-    [data-mb-part="writing"] {
-      grid-area: 2 / 1 / 3 / -1 !important;
-      min-height: 110px !important; height: 100% !important;
-      max-height: none !important; width: 100% !important;
-      margin: 0 !important; overflow-y: auto !important;
-      color: #30342e !important; background: transparent !important;
-      border: none !important; padding-top: 8px !important;
-      box-sizing: border-box !important;
-    }
-    [data-mb-part="writing"] div {
-      background-color: transparent !important; border: none !important;
-    }
-    [data-mb-part="writing"] [contenteditable="true"],
-    [data-mb-part="writing"][contenteditable="true"],
-    [data-mb-part="writing"] .public-DraftEditorPlaceholder-root {
-      font: 400 20px/1.6 -apple-system, BlinkMacSystemFont, sans-serif !important;
-      letter-spacing: -0.3px !important;
-    }
-    [data-mb-part="writing"] .public-DraftEditorPlaceholder-root { color: #aaa99f !important; }
-    [data-mb-part="writing"] .public-DraftEditorPlaceholder-inner {
-      font: 400 20px/1.6 -apple-system, BlinkMacSystemFont, sans-serif !important;
-      color: #aaa99f !important; letter-spacing: -0.3px !important;
-    }
-    [data-mb-part="media"] {
-      grid-area: 3 / 1 / 4 / -1 !important; max-height: 150px !important;
-      overflow-y: auto !important; border-radius: 10px !important;
-    }
-    [data-mb-part="reply"] {
-      grid-area: 4 / 1 / 5 / -1 !important; justify-self: start !important;
-      color: #8c8e84 !important; font-size: 11px !important;
-      height: 18px !important; min-height: 0 !important; padding: 0 !important;
-      background: transparent !important;
-    }
-    [data-mb-part="reply"] * { color: #8c8e84 !important; font-size: 11px !important; }
-    [data-mb-part="reply"] svg { width: 12px !important; height: 12px !important; }
-    [data-mb-part="tools"] {
-      grid-area: 5 / 1 / 6 / -1 !important;
-      height: 40px !important; min-height: 0 !important; width: 100% !important;
-      border: none !important; border-top: 1px solid #e4e4dd !important;
-      padding: 9px 112px 0 0 !important; margin: 0 !important;
-      box-sizing: border-box !important; background: transparent !important;
-    }
-    [data-mb-part="tools"] div, [data-mb-part="tools"] nav { background-color: transparent !important; border: none !important; }
-    [data-mb-part="tools"] nav,
-    [data-mb-part="tools"] [role="tablist"] { height: 30px !important; min-height: 30px !important; }
-    [data-mb-part="tools"] button { color: #858d81 !important; width: 30px !important; height: 30px !important; }
-    [data-mb-part="tools"] svg { width: 18px !important; height: 18px !important; color: #858d81 !important; }
-    [data-mb-part="tools"] [data-testid="ScrollSnap-prevButtonWrapper"],
-    [data-mb-part="tools"] [data-testid="ScrollSnap-nextButtonWrapper"] { display: none !important; }
-    [data-mb-surface="composer"][data-mb-designed] [data-testid="tweetButton"],
-    [data-mb-surface="composer"][data-mb-designed] [data-testid="tweetButtonInline"] {
-      position: fixed !important; right: 28px !important; bottom: 24px !important;
-      width: 86px !important; min-width: 86px !important; height: 34px !important;
-      min-height: 34px !important; margin: 0 !important; padding: 0 15px !important;
-      background-color: #b8492e !important; border: none !important;
-      border-radius: 9px !important; z-index: 2 !important;
-      font: 600 13px -apple-system, BlinkMacSystemFont, sans-serif !important;
+    [data-mb-surface="composer"] [data-testid="tweetButton"]:is([disabled], [aria-disabled="true"]),
+    [data-mb-surface="composer"] [data-testid="tweetButtonInline"]:is([disabled], [aria-disabled="true"]) {
+      opacity: 1 !important; background-color: #d9d4c9 !important;
     }
     [data-mb-surface="composer"] [data-testid="tweetButton"] *,
-    [data-mb-surface="composer"] [data-testid="tweetButtonInline"] * { font-size: 13px !important; }
+    [data-mb-surface="composer"] [data-testid="tweetButtonInline"] * {
+      font-weight: 600 !important; letter-spacing: 0 !important;
+    }
     [data-mb-surface="composer"] [data-testid="unsentButton"],
     [data-mb-surface="composer"] [data-testid="gifSearchButton"],
     [data-mb-surface="composer"] [data-testid="geoButton"],
@@ -299,6 +280,85 @@
 
   function attachStyle() {
     if (document.documentElement && !style.isConnected) document.documentElement.appendChild(style);
+  }
+
+  // ---- Tones: map X's palette onto the app's palette by measured color. ----
+
+  const tones = new WeakMap();
+  const toneAttributes = ['data-mb-fg', 'data-mb-bg', 'data-mb-bd', 'data-mb-stroke', 'data-mb-fill'];
+  const skipTone = new Set(['IMG', 'VIDEO', 'CANVAS', 'SOURCE', 'PICTURE', 'STYLE', 'SCRIPT', 'IFRAME', 'BR']);
+
+  function parseColor(value) {
+    const match = /^rgba?\(([^)]+)\)$/.exec(value || '');
+    if (!match) return null;
+    const parts = match[1].split(/[\s,/]+/).filter(Boolean).map(part =>
+      part.endsWith('%') ? parseFloat(part) / 100 : Number(part));
+    if (parts.length < 3 || parts.some(Number.isNaN)) return null;
+    return { r: parts[0] / 255, g: parts[1] / 255, b: parts[2] / 255, a: parts.length > 3 ? parts[3] : 1 };
+  }
+
+  /// 'blue' is X's accent family; neutrals are split by lightness.
+  function colorKind(color) {
+    if (!color || color.a < 0.04) return null;
+    const max = Math.max(color.r, color.g, color.b), min = Math.min(color.r, color.g, color.b);
+    const delta = max - min, lightness = (max + min) / 2;
+    const saturation = delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1));
+    if (saturation < 0.25 || delta < 0.08) return lightness < 0.3 ? 'dark' : lightness > 0.86 ? 'light' : 'grey';
+    let hue = max === color.r ? ((color.g - color.b) / delta) % 6
+      : max === color.g ? (color.b - color.r) / delta + 2 : (color.r - color.g) / delta + 4;
+    hue = (hue * 60 + 360) % 360;
+    return hue >= 188 && hue <= 218 && saturation > 0.45 ? 'blue' : 'other';
+  }
+
+  function measureTone(node, computed) {
+    const marks = [];
+    const fg = colorKind(parseColor(computed.color));
+    if (fg === 'dark') marks.push(['data-mb-fg', 'ink']);
+    else if (fg === 'grey') marks.push(['data-mb-fg', 'muted']);
+    else if (fg === 'blue') marks.push(['data-mb-fg', 'accent']);
+    const background = parseColor(computed.backgroundColor);
+    const bg = colorKind(background);
+    if (bg === 'blue') marks.push(['data-mb-bg', background.a > 0.85 ? 'accent' : 'tint']);
+    else if ((bg === 'light' || bg === 'grey') && background.a > 0.5) {
+      // Thin opaque rules (thread connectors, dividers) become hairlines;
+      // white panels and translucent headers become the warm page color.
+      const thin = node.offsetWidth > 0 && node.offsetHeight > 0 && (node.offsetWidth <= 4 || node.offsetHeight <= 2);
+      if (thin) marks.push(['data-mb-bg', 'line']);
+      else if (bg === 'light') marks.push(['data-mb-bg', 'paper']);
+    }
+    const bordered = ['Top', 'Right', 'Bottom', 'Left'].some(side =>
+      parseFloat(computed[`border${side}Width`]) > 0 && computed[`border${side}Style`] !== 'none');
+    if (bordered) {
+      const border = colorKind(parseColor(computed.borderTopColor) || parseColor(computed.borderBottomColor));
+      if (border === 'blue') marks.push(['data-mb-bd', 'accent']);
+      else if (border && border !== 'other') marks.push(['data-mb-bd', 'line']);
+    }
+    if (node instanceof SVGElement) {
+      const stroke = colorKind(parseColor(computed.stroke));
+      if (stroke === 'blue') marks.push(['data-mb-stroke', 'accent']);
+      else if (stroke === 'light' || stroke === 'grey') marks.push(['data-mb-stroke', 'line']);
+      if (colorKind(parseColor(computed.fill)) === 'blue') marks.push(['data-mb-fill', 'accent']);
+    }
+    return marks;
+  }
+
+  function applyTones(roots) {
+    const changed = [];
+    for (const root of roots) {
+      if (!root?.isConnected) continue;
+      for (const node of [root, ...root.querySelectorAll('*')]) {
+        if (skipTone.has(node.tagName)) continue;
+        const signature = (node.getAttribute('class') || '') + '\n' + (node.getAttribute('style') || '');
+        if (tones.get(node) === signature) continue;
+        tones.set(node, signature);
+        changed.push(node);
+      }
+    }
+    if (!changed.length) return;
+    // Clear, then read every style, then write: one style recalculation per scan.
+    for (const node of changed) for (const name of toneAttributes) node.removeAttribute(name);
+    const measured = changed.map(node => [node, measureTone(node, getComputedStyle(node))]);
+    for (const [node, marks] of measured) for (const [name, value] of marks) node.setAttribute(name, value);
   }
 
   function hideSurface() {
@@ -395,135 +455,12 @@
     return handle ? { handle } : {};
   }
 
-  function composerAvatar(root) {
-    const original = root.querySelector('[data-testid^="UserAvatar-Container-"]:not([data-mb-fallback-avatar])')
-      || root.querySelector('a:has(img)');
-    const account = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
-    const handle = profile().handle?.slice(1);
-    const matching = handle ? document.querySelector(`[data-testid="UserAvatar-Container-${handle}"] img`) : null;
-    const image = original?.querySelector('img') || account?.querySelector('img') || matching;
-    if (image?.src?.startsWith('https://')) avatarURL = image.src;
-    if (original) {
-      fallbackAvatars.get(root)?.remove();
-      fallbackAvatars.delete(root);
-      return original;
-    }
-    // At desktop breakpoints X places the avatar outside the smallest inline
-    // composer. Render just its image here, without exposing that larger page.
-    if (!avatarURL) return null;
-    let avatar = fallbackAvatars.get(root);
-    if (!avatar?.isConnected) {
-      avatar = document.createElement('img');
-      avatar.setAttribute('data-mb-fallback-avatar', '');
-      avatar.alt = 'Your profile picture';
-      fallbackAvatars.set(root, avatar);
-      root.appendChild(avatar);
-    }
-    if (avatar.src !== avatarURL) avatar.src = avatarURL;
-    return avatar;
-  }
-
-  function clearDesign(root) {
-    root.querySelectorAll('[data-mb-layout], [data-mb-part]').forEach(node => {
-      node.removeAttribute('data-mb-layout');
-      node.removeAttribute('data-mb-part');
-    });
-    root.removeAttribute('data-mb-designed');
-    identities.get(root)?.remove();
-    identities.delete(root);
-    fallbackAvatars.get(root)?.remove();
-    fallbackAvatars.delete(root);
-    layouts.delete(root);
-  }
-
   function hasAuthoringMedia(root) {
     if (root.querySelector('[data-testid="attachments"], [data-testid="mediaPreview"], [data-testid="tweetPhoto"], video, canvas')) return true;
-    const isAvatar = node => node.closest('[data-testid^="UserAvatar-Container-"], [data-mb-part="avatar"], [data-mb-fallback-avatar], a[aria-disabled="true"]');
-    if ([...root.querySelectorAll('img[src]')].some(image => !isAvatar(image))) return true;
-    return [...root.querySelectorAll('div')].some(node => !isAvatar(node) && getComputedStyle(node).backgroundImage.includes('url('));
-  }
-
-  function designComposer(root) {
-    const editor = root.querySelector(editorSelector);
-    const post = root.querySelector(postSelector);
-    if (!editor || !post) return;
-    // Keep X's expanded authoring layout for threads, polls, and other forms.
-    // Compact styling must never hide a newly added editor or form input.
-    if (hasAuthoringMedia(root) || root.querySelectorAll(editorSelector).length > 1
-        || root.querySelector('input:not([type="file"]):not([type="hidden"]), textarea')) {
-      clearDesign(root);
-      return;
-    }
-    const writing = editor.closest('[data-testid$="RichTextInputContainer"]') || editor;
-    const avatar = composerAvatar(root);
-    const tools = root.querySelector('[data-testid="toolBar"]');
-    const reply = [...root.querySelectorAll('button[aria-label]')].find(button =>
-      !tools?.contains(button) && button !== post
-      && /reply|antwort|responder|répond|返信/i.test(button.getAttribute('aria-label') || '')
-      && !['app-bar-back', 'app-bar-close', 'unsentButton'].includes(button.dataset.testid));
-    let identity = identities.get(root);
-    if (!identity?.isConnected) {
-      identity = document.createElement('div');
-      identity.setAttribute('data-mb-part', 'identity');
-      identity.setAttribute('role', 'button');
-      identity.setAttribute('tabindex', '0');
-      identity.setAttribute('title', 'Switch accounts');
-      identities.set(root, identity);
-      root.appendChild(identity);
-    }
-    const handle = profile().handle || 'Your account';
-    if (identity.dataset.handle !== handle) {
-      identity.replaceChildren(document.createTextNode(handle));
-      const caption = document.createElement('small');
-      caption.textContent = 'Posting on X';
-      identity.appendChild(caption);
-      identity.dataset.handle = handle;
-    }
-    const media = [...root.querySelectorAll('[data-testid="attachments"], [data-testid="mediaPreview"], [role="alert"]')];
-    const parts = new Map([[identity, 'identity'], [writing, 'writing'], [post, 'post']]);
-    if (avatar) parts.set(avatar, 'avatar');
-    if (tools) parts.set(tools, 'tools');
-    if (reply) parts.set(reply, 'reply');
-    media.forEach(node => { if (!writing.contains(node)) parts.set(node, 'media'); });
-    // Never omit an unfamiliar authoring control. X's poll/remove-media buttons
-    // and newer preview wrappers are not guaranteed to use our known test IDs.
-    const extraControls = [...root.querySelectorAll('button, [role="button"], [contenteditable="true"], input, textarea, select')]
-      .filter(control => ![...parts.keys()].some(part => part === control || part.contains(control))
-        && !control.closest('[data-mb-hidden]')
-        && !control.matches('input[type="file"], input[type="hidden"], [data-testid="unsentButton"]'));
-    if (extraControls.length) { clearDesign(root); return; }
-    const previous = layouts.get(root);
-    if (previous && previous.parts.size === parts.size
-        && [...parts].every(([node, kind]) => previous.parts.get(node) === kind)
-        && [...previous.bridges].every(([node, children]) => node.isConnected
-          && children.length === node.children.length
-          && children.every((child, index) => child === node.children[index]))) return;
-    // Subgrid retains real wrapper geometry for X's press/anchor measurements.
-    // display:contents makes those rectangles zero and can disable authoring
-    // controls even when their buttons look correct. DOM parents stay intact.
-    root.querySelectorAll('[data-mb-layout]').forEach(node => node.removeAttribute('data-mb-layout'));
-    root.querySelectorAll('[data-mb-part]').forEach(node => {
-      if (!parts.has(node)) node.removeAttribute('data-mb-part');
-    });
-    const bridges = new Set([root]);
-    for (const [part, kind] of parts) {
-      part.setAttribute('data-mb-part', kind);
-      let ancestor = part.parentElement;
-      while (ancestor && ancestor !== root) {
-        if (!parts.has(ancestor)) bridges.add(ancestor);
-        ancestor = ancestor.parentElement;
-      }
-    }
-    for (const bridge of bridges) {
-      if (bridge !== root) bridge.setAttribute('data-mb-layout', 'bridge');
-      for (const child of bridge.children) {
-        if (!parts.has(child) && !bridges.has(child) && !['STYLE', 'SCRIPT'].includes(child.tagName)) {
-          child.setAttribute('data-mb-layout', 'omit');
-        }
-      }
-    }
-    root.setAttribute('data-mb-designed', '');
-    layouts.set(root, { parts, bridges: new Map([...bridges].map(node => [node, [...node.children]])) });
+    // Avatars and link-card previews come back from the text; they are not attachments.
+    const ignored = node => node.closest('[data-testid^="UserAvatar-Container-"], [data-testid^="card."], a[aria-disabled="true"]');
+    if ([...root.querySelectorAll('img[src]')].some(image => !ignored(image))) return true;
+    return [...root.querySelectorAll('div')].some(node => !ignored(node) && getComputedStyle(node).backgroundImage.includes('url('));
   }
 
   function restrictSurface(root, mode) {
@@ -543,7 +480,12 @@
       }
     });
     if (mode === 'composer') {
-      root.querySelectorAll('[data-testid="app-bar-close"], [data-testid="app-bar-back"], [data-testid="AppTabBar_Home_Link"]').forEach(node => node.setAttribute('data-mb-hidden', ''));
+      root.querySelectorAll('[data-testid="app-bar-close"], [data-testid="app-bar-back"]').forEach(node => {
+        node.setAttribute('data-mb-concealed', '');
+        node.setAttribute('tabindex', '-1');
+        node.setAttribute('aria-hidden', 'true');
+      });
+      root.querySelectorAll('[data-testid="AppTabBar_Home_Link"]').forEach(node => node.setAttribute('data-mb-hidden', ''));
     } else if (mode === 'login') {
       root.querySelectorAll('iframe[src*="accounts.google.com"], iframe[src*="appleid.apple.com"]').forEach(frame => frame.setAttribute('data-mb-hidden', ''));
       root.querySelectorAll('button, [role="button"]').forEach(button => {
@@ -576,10 +518,10 @@
       const root = findComposer();
       if (root) {
         restrictSurface(root, 'composer');
-        designComposer(root);
         showSurface(root, 'composer');
         updatePopovers(root);
         showSurface(root, 'composer');
+        applyTones([root, ...popovers]);
         hadComposer = true;
         report('composer', profile());
         updateDraft();
@@ -649,23 +591,23 @@
         const bounds = node.getBoundingClientRect();
         const testID = node.getAttribute('data-testid');
         return { tag: node.tagName, role: node.getAttribute('role'),
-          testID: ['fileInput', 'toolBar', 'tweetButton', 'tweetButtonInline'].includes(testID) ? testID : null,
+          testID: ['fileInput', 'toolBar', 'tweetButton', 'tweetButtonInline', 'addButton'].includes(testID) ? testID : null,
           linkRoute: node.matches('a[href]') ? routeOf(node.href) : null,
-          inert: !!node.closest('[inert]'), omitted: !!node.closest('[data-mb-layout="omit"]'),
-          disabled: !!node.disabled, width: bounds.width, height: bounds.height };
+          inert: !!node.closest('[inert]'), disabled: !!node.disabled, width: bounds.width, height: bounds.height };
       };
-      window.webkit?.messageHandlers?.focus?.postMessage({ state: 'diagnostic', details: JSON.stringify({
+      post({ state: 'diagnostic', details: JSON.stringify({
         target: describe(target), ancestors: [target.parentElement, target.parentElement?.parentElement,
           target.parentElement?.parentElement?.parentElement].filter(Boolean).map(describe), inside: surface.contains(target),
+        editors: editorsIn(surface).length,
         inputs: [...document.querySelectorAll('input[type="file"]')].map(input => ({ ...describe(input),
           parent: describe(input.parentElement), owner: input.closest('button') ? describe(input.closest('button')) : null }))
       }) });
-      setTimeout(() => window.webkit?.messageHandlers?.focus?.postMessage({ state: 'diagnostic', details: JSON.stringify({
+      setTimeout(() => post({ state: 'diagnostic', details: JSON.stringify({
         popupCandidates: [...document.querySelectorAll(popoverSelector)].map(node => ({ ...describe(node), inside: !!surface?.contains(node),
           parents: [node.parentElement, node.parentElement?.parentElement, node.parentElement?.parentElement?.parentElement].filter(Boolean).map(parent => ({ ...describe(parent), tabIndex: parent.getAttribute('tabindex'), fields: parent.querySelectorAll('input:not([type="file"]),textarea').length })) })),
         dropdowns: document.querySelectorAll('[data-testid="Dropdown"]').length,
         activePopovers: popovers.size, focusedTag: document.activeElement?.tagName,
-        editable: editable(document.activeElement)
+        editable: editable(document.activeElement), editors: surface ? editorsIn(surface).length : 0
       }) }), 200);
     }
     if (target instanceof HTMLInputElement && target.type === 'file') {
@@ -676,7 +618,7 @@
       }
     }
     const link = target.closest('a[href]');
-    if (link && !['composer', 'login'].includes(routeOf(link.href))) {
+    if (target.closest('[data-mb-concealed]') || (link && !['composer', 'login'].includes(routeOf(link.href)))) {
       event.preventDefault();
       event.stopImmediatePropagation();
       return;
@@ -687,14 +629,8 @@
       event.stopImmediatePropagation();
       return;
     }
-    if (target.closest('[data-mb-part="identity"]')) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      window.webkit?.messageHandlers?.focus?.postMessage({ state: 'accounts' });
-      return;
-    }
     // Activate the original input directly when X mounts it beside its media
-    // button. CSS layout flattening can disrupt X's pointer/press responder,
+    // button. X's press responder can miss clicks on a resized toolbar,
     // although the file input and its React change handler remain intact.
     const button = target.closest('button');
     const upload = button && !button.matches(postSelector) && button.closest('[data-testid="toolBar"]') && surface?.contains(button)
@@ -710,8 +646,8 @@
       setTimeout(() => { authoringClick = false; }, 0);
       return;
     }
-    const post = target.closest(postSelector);
-    if (post && !post.disabled && post.getAttribute('aria-disabled') !== 'true') postRequested = true;
+    const postButton = target.closest(postSelector);
+    if (postButton && !postButton.disabled && postButton.getAttribute('aria-disabled') !== 'true') postRequested = true;
     else if (surface?.querySelector(editorSelector)) {
       const trigger = button || target.closest('[role="button"]');
       if (trigger && !trigger.matches(postSelector) && !trigger.disabled && trigger.getAttribute('aria-disabled') !== 'true') requestPopover(trigger);
@@ -730,27 +666,22 @@
     const button = event.target instanceof Element ? event.target.closest('button, [role="button"]') : null;
     if (event.button === 0 && button && surface?.contains(button) && surface.querySelector(editorSelector)
         && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
-        && !button.matches(postSelector + ', [data-mb-part="identity"]')) requestPopover(button, true);
+        && !button.matches(postSelector)) requestPopover(button, true);
   }, true);
 
-  // The large blank writing region should act like an editor, even when X's
-  // contenteditable element only occupies its first line. Don't intercept
-  // selection, form fields, buttons, previews, or clicks inside authoring popups.
+  // Blank space around the writing area should act like the editor, even when
+  // X's contenteditable only occupies its first line. Wrappers around several
+  // posts are left to X, which activates the thread post that was clicked.
   document.addEventListener('mousedown', event => {
     const target = event.target instanceof Element ? event.target : null;
-    if (event.button !== 0 || !target || !surface?.hasAttribute('data-mb-designed') || popovers.size
-        || !surface.contains(target) || target.closest('button, a, input, textarea, select, [role="button"], [contenteditable="true"]')) return;
-    if ((target === surface || target.closest('[data-mb-part="writing"]')) && focusEditor()) event.preventDefault();
+    if (event.button !== 0 || !target || !surface?.contains(target) || popovers.size
+        || target.closest('button, a, input, textarea, select, label, [role="button"], [contenteditable="true"]')) return;
+    const inside = editorsIn(surface).filter(editor => target.contains(editor));
+    if (target !== surface && inside.length !== 1) return;
+    if (focusEditor(true, inside[0])) event.preventDefault();
   }, true);
 
   document.addEventListener('keydown', event => {
-    if (event.target instanceof Element && event.target.closest('[data-mb-part="identity"]')
-        && ['Enter', ' '].includes(event.key)) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      window.webkit?.messageHandlers?.focus?.postMessage({ state: 'accounts' });
-      return;
-    }
     const button = event.target instanceof Element ? event.target.closest('button, [role="button"]') : null;
     if (['Enter', ' '].includes(event.key) && !event.metaKey && !event.ctrlKey && !event.altKey
         && button && surface?.contains(button) && surface.querySelector(editorSelector)
@@ -771,13 +702,13 @@
     if (!surface?.contains(event.target) || !surface.querySelector(editorSelector)) return;
     // DraftJS can commit its DOM after the input handler. Read after the event,
     // and let the mutation scan confirm the final rendered text as a backup.
-    queueMicrotask(updateDraft);
+    queueMicrotask(() => updateDraft());
   }, true);
   document.addEventListener('change', event => {
     if (event.target instanceof HTMLInputElement && event.target.type === 'file'
         && (surface?.contains(event.target) || authorizedUploads.has(event.target)) && event.target.files?.length) {
       pendingMedia = true;
-      queueMicrotask(updateDraft);
+      queueMicrotask(() => updateDraft());
     }
   }, true);
 
@@ -840,6 +771,77 @@
     try { button.click(); } finally { internalNavigation = false; }
     scheduleScan();
     return true;
+  };
+
+  // ---- Drafts: put saved text back into X's own editor. ----
+
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  async function waitFor(probe, timeout) {
+    const end = performance.now() + timeout;
+    for (;;) {
+      const value = probe();
+      if (value || performance.now() > end) return value;
+      await pause(40);
+    }
+  }
+  const comparable = text => text.replace(/\s+/g, ' ').trim();
+
+  function selectContents(editor) {
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    const selection = getSelection();
+    selection.removeAllRanges(); selection.addRange(range);
+  }
+
+  /// Replaces one editor's text the way a person would: select everything and
+  /// paste. X's editor keeps its own model, line breaks and character count.
+  async function insertInto(editor, text) {
+    if (comparable(postText(editor)) === comparable(text)) return true;
+    editor.focus({ preventScroll: true });
+    selectContents(editor);
+    await pause(50); // Let the editor observe the new selection first.
+    const before = postText(editor);
+    const transfer = new DataTransfer();
+    transfer.setData('text/plain', text);
+    editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
+    await pause(50);
+    if (postText(editor) === before) {
+      // No paste handler took it; fall back to native editing.
+      selectContents(editor);
+      document.execCommand('insertText', false, text);
+      await pause(20);
+    }
+    return comparable(postText(editor)) === comparable(text);
+  }
+
+  /// Native drafts call this with a list of posts. Returns 'ok', 'partial',
+  /// 'failed', 'reload' (the composer already holds a thread) or 'unavailable'.
+  window.__minimalBirdInsertPosts = async posts => {
+    if (!Array.isArray(posts) || !posts.length || posts.some(text => typeof text !== 'string')) return 'failed';
+    const ready = await waitFor(() => routeOf(location.href) === 'composer' && surface?.isConnected
+      && editorsIn(surface).length > 0, 4000);
+    if (!ready || restoring) return 'unavailable';
+    if (editorsIn(surface).length > 1) return 'reload';
+    restoring = true;
+    let inserted = 0;
+    try {
+      for (const [index, text] of posts.entries()) {
+        let editor = editorsIn(surface)[index];
+        if (!editor) {
+          const add = surface.querySelector('[data-testid="addButton"]');
+          if (!add || add.disabled || add.getAttribute('aria-disabled') === 'true') break;
+          add.click();
+          editor = await waitFor(() => surface?.isConnected && editorsIn(surface)[index], 2500);
+          if (!editor) break;
+        }
+        if (!(await insertInto(editor, text))) break;
+        inserted += 1;
+      }
+    } finally {
+      restoring = false;
+      updateDraft(true);
+    }
+    return inserted === posts.length ? 'ok' : inserted ? 'partial' : 'failed';
   };
 
   document.addEventListener('DOMContentLoaded', scheduleScan);

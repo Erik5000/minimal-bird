@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private lazy var accounts = AccountProfiles()
     private var controllers: [UUID: ComposerController] = [:]
     private var accountsMenu = NSMenu(title: "Accounts")
+    private let accountButton = NSButton()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--self-test") {
@@ -22,16 +23,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         controller = controllerFor(accounts.profiles.first { $0.id == accounts.selectedID }!)
         buildMenu()
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 660),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
         window.title = "Minimal Bird"
-        window.titleVisibility = .visible
+        window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.backgroundColor = Palette.paper
         window.appearance = NSAppearance(named: .aqua)
-        window.minSize = NSSize(width: 480, height: 420)
+        window.minSize = NSSize(width: 440, height: 460)
         window.contentViewController = controller
+        window.addTitlebarAccessoryViewController(makeAccountAccessory())
         updateWindowTitle()
         window.delegate = self
         window.isReleasedWhenClosed = false
@@ -45,8 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func controllerFor(_ profile: AccountProfile) -> ComposerController {
         if let existing = controllers[profile.id] { return existing }
         let store = profile.usesDefaultStore ? WKWebsiteDataStore.default() : WKWebsiteDataStore(forIdentifier: profile.id)
-        let next = ComposerController(dataStore: store)
-        next.accountMenu = { [weak self] in self?.makeAccountsMenu() ?? NSMenu() }
+        let next = ComposerController(dataStore: store, drafts: DraftStore(url: DraftStore.defaultURL(for: profile.id)))
         next.accountChanged = { [weak self] handle in
             guard let self else { return }
             self.accounts.updateLabel(handle, for: profile.id)
@@ -61,6 +62,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu(title: "Accounts")
         fillAccountsMenu(menu)
         return menu
+    }
+
+    /// The account name sits quietly in the title bar, clear of X's own
+    /// controls, and opens the account and app actions.
+    private func makeAccountAccessory() -> NSTitlebarAccessoryViewController {
+        accountButton.isBordered = false
+        accountButton.refusesFirstResponder = true
+        accountButton.font = .systemFont(ofSize: 12, weight: .medium)
+        accountButton.contentTintColor = Palette.muted
+        accountButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 8, weight: .semibold))
+        accountButton.imagePosition = .imageTrailing
+        accountButton.imageHugsTitle = true
+        accountButton.target = self
+        accountButton.action = #selector(showAccountMenu(_:))
+        accountButton.toolTip = "Accounts and options"
+        accountButton.translatesAutoresizingMaskIntoConstraints = false
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 28))
+        container.addSubview(accountButton)
+        NSLayoutConstraint.activate([
+            accountButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            accountButton.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            accountButton.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor)
+        ])
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = container
+        accessory.layoutAttribute = .trailing
+        return accessory
+    }
+
+    @objc private func showAccountMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        fillAccountsMenu(menu)
+        menu.addItem(.separator())
+        for (title, action, key) in [("New post", #selector(ComposerController.newPost), "n"),
+                                     ("Reload X", #selector(ComposerController.reloadPage), "r"),
+                                     (controller.draftsExpanded ? "Hide Drafts" : "Show Drafts", #selector(ComposerController.toggleDrafts), "d")] {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: key)
+            item.target = controller
+        }
+        menu.addItem(.separator())
+        let signOut = menu.addItem(withTitle: "Sign out…", action: #selector(ComposerController.signOut), keyEquivalent: "")
+        signOut.target = controller
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 6), in: sender)
+        controller.restoreEditorFocus()
     }
 
     private func fillAccountsMenu(_ menu: NSMenu) {
@@ -83,6 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let window else { return }
         let label = accounts.profiles.first { $0.id == accounts.selectedID }?.label ?? ""
         window.title = accounts.profiles.count > 1 ? "Minimal Bird · \(label)" : "Minimal Bird"
+        accountButton.title = label.hasPrefix("@") ? label : accounts.profiles.count > 1 ? label : "Account"
+        accountButton.setAccessibilityLabel("Account: \(accountButton.title)")
     }
 
     @objc private func switchAccount(_ sender: NSMenuItem) {
@@ -146,6 +194,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         newPost.target = controller
         let reload = file.addItem(withTitle: "Reload X", action: #selector(ComposerController.reloadPage), keyEquivalent: "r")
         reload.target = controller
+        file.addItem(.separator())
+        let toggleDrafts = file.addItem(withTitle: "Show or Hide Drafts", action: #selector(ComposerController.toggleDrafts), keyEquivalent: "d")
+        toggleDrafts.target = controller
+        file.addItem(.separator())
         file.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileItem.submenu = file
         menu.insertItem(fileItem, at: 1)
@@ -169,7 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let alert = NSAlert()
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         alert.messageText = version.map { "Minimal Bird \($0)" } ?? "Minimal Bird"
-        alert.informativeText = "A little space to write, post, and get on with your day.\n\nUses X’s website in Apple WebKit. No API keys. No analytics.\n\nFree software under GNU GPL v3.0 only.\nCopyright © 2026 Minimal Bird contributors.\nProvided without warranty.\n\nInspired by Search by Office Commun.\nIndependent software, not affiliated with X."
+        alert.informativeText = "A little space to write, post, and get on with your day.\n\nUses X’s website in Apple WebKit. No API keys. No analytics. Drafts stay on this Mac.\n\nFree software under GNU GPL v3.0 only.\nCopyright © 2026 Minimal Bird contributors.\nProvided without warranty.\n\nInspired by Search by Office Commun.\nIndependent software, not affiliated with X."
         alert.addButton(withTitle: "OK")
         let license = Bundle.main.url(forResource: "LICENSE", withExtension: "txt")
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
@@ -227,6 +279,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         controller.resume()
+    }
+    func applicationWillTerminate(_ notification: Notification) {
+        controllers.values.forEach { $0.persistDrafts() }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         for profile in accounts.profiles {
