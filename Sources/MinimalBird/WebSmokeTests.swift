@@ -259,7 +259,8 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
                 <div id="secondary" style="color:rgb(83,100,113)">Everyone can reply</div>
                 <div id="rule" style="width:2px;height:40px;background:rgb(207,217,222)"></div>
               </div>
-              <div data-testid="toolBar"><button id="tool" style="color:rgb(29,155,240)">Media</button>
+              <div data-testid="toolBar"><button id="tool" style="color:rgb(29,155,240)">Media<svg width="20" height="20"><path id="toolIcon" d="M2 2h16v16H2z" style="fill:none;stroke:currentColor"/></svg></button>
+                <svg width="26" height="26"><circle id="ring" cx="13" cy="13" r="11" style="fill:none;stroke:rgb(29,155,240)"/></svg>
                 <div id="remove" style="background:rgba(15,20,25,0.75);color:rgb(255,255,255)">Remove</div></div>
               <button data-testid="tweetButton" id="post" style="background:rgb(29,155,240);color:rgb(255,255,255)">Post</button>
             </div>
@@ -271,7 +272,8 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("a modal's dimming backdrop is cleared", "getComputedStyle(document.querySelector('#scrim')).backgroundColor==='rgba(0, 0, 0, 0)'")
         try await check("thread connectors become hairlines", "getComputedStyle(document.querySelector('#rule')).backgroundColor==='\(line)'")
         try await check("text uses the app's ink and muted tones", "getComputedStyle(document.querySelector('#editor')).color==='rgb(43, 50, 48)' && getComputedStyle(document.querySelector('#secondary')).color==='rgb(128, 132, 124)'")
-        try await check("toolbar icons stay quiet", "getComputedStyle(document.querySelector('#tool')).color==='rgb(128, 132, 124)'")
+        try await check("toolbar icons stay quiet", "getComputedStyle(document.querySelector('#tool')).color==='rgb(128, 132, 124)' && getComputedStyle(document.querySelector('#toolIcon')).stroke==='rgb(128, 132, 124)'")
+        try await check("the character ring keeps the accent", "getComputedStyle(document.querySelector('#ring')).stroke==='\(accent)'")
         try await check("one system typeface across the composer", "getComputedStyle(document.querySelector('#editor')).fontFamily.includes('apple-system') && getComputedStyle(document.querySelector('#post')).fontFamily.includes('apple-system')")
         try await check("overlay controls on media keep their contrast", "getComputedStyle(document.querySelector('#remove')).backgroundColor==='rgba(15, 20, 25, 0.75)' && getComputedStyle(document.querySelector('#remove')).color==='rgb(255, 255, 255)'")
         try await js("document.querySelector('#post').style.backgroundColor='rgb(26,140,216)';void 0")

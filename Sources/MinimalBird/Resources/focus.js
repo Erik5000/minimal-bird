@@ -248,7 +248,6 @@
 
     /* Toolbar icons stay quiet; the accent is kept for Post, links and progress. */
     [data-mb-surface="composer"] [data-testid="toolBar"] [data-mb-fg="accent"] { color: var(--mb-muted) !important; }
-    [data-mb-surface="composer"] [data-testid="toolBar"] [data-mb-fill="accent"] { fill: var(--mb-muted) !important; }
     [data-mb-surface="composer"] [data-testid="toolBar"] [data-mb-bg="tint"] { background-color: rgba(43, 50, 48, 0.07) !important; }
 
     [data-mb-surface="composer"] [data-testid^="tweetTextarea_"],
@@ -337,10 +336,14 @@
       else if (border && border !== 'other') marks.push(['data-mb-bd', 'line']);
     }
     if (node instanceof SVGElement) {
-      const stroke = colorKind(parseColor(computed.stroke));
-      if (stroke === 'blue') marks.push(['data-mb-stroke', 'accent']);
-      else if (stroke === 'light' || stroke === 'grey') marks.push(['data-mb-stroke', 'line']);
-      if (colorKind(parseColor(computed.fill)) === 'blue') marks.push(['data-mb-fill', 'accent']);
+      // Icons painted with currentColor follow the text tone above; only
+      // explicit paints, such as the character-count ring, are mapped here.
+      if (computed.stroke !== computed.color) {
+        const stroke = colorKind(parseColor(computed.stroke));
+        if (stroke === 'blue') marks.push(['data-mb-stroke', 'accent']);
+        else if (stroke === 'light' || stroke === 'grey') marks.push(['data-mb-stroke', 'line']);
+      }
+      if (computed.fill !== computed.color && colorKind(parseColor(computed.fill)) === 'blue') marks.push(['data-mb-fill', 'accent']);
     }
     return marks;
   }

@@ -22,6 +22,14 @@ final class DraftStoreTests: XCTestCase {
         XCTAssertEqual(store.drafts.count, 2)
     }
 
+    func testDraftsStayInDateOrder() throws {
+        let store = DraftStore(url: nil)
+        let older = try XCTUnwrap(store.save(["Older"], id: nil, now: Date(timeIntervalSince1970: 100)))
+        let oldest = try XCTUnwrap(store.save(["Oldest"], id: nil, now: Date(timeIntervalSince1970: 50)))
+        let newest = try XCTUnwrap(store.save(["Newest"], id: nil, now: Date(timeIntervalSince1970: 200)))
+        XCTAssertEqual(store.drafts.map(\.id), [newest, older, oldest])
+    }
+
     func testClearingTextRemovesTheDraft() throws {
         let store = DraftStore(url: nil)
         let id = try XCTUnwrap(store.save(["Soon gone"], id: nil))

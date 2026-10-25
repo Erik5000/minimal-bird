@@ -68,15 +68,19 @@ public final class DraftStore {
             var draft = drafts.remove(at: index)
             draft.posts = posts
             draft.updated = now
-            drafts.insert(draft, at: 0)
+            insert(draft)
             dirty = true
             return id
         }
         let draft = Draft(id: id ?? UUID(), posts: posts, updated: now)
-        drafts.insert(draft, at: 0)
+        insert(draft)
         if drafts.count > Self.limit { drafts.removeLast(drafts.count - Self.limit) }
         dirty = true
         return draft.id
+    }
+
+    private func insert(_ draft: Draft) {
+        drafts.insert(draft, at: drafts.firstIndex { $0.updated <= draft.updated } ?? drafts.count)
     }
 
     public func remove(_ id: UUID) {
