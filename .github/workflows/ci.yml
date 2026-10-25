@@ -20,17 +20,78 @@ jobs:
           name: window-snapshots
           path: ${{ runner.temp }}/snapshots
           if-no-files-found: ignore
-      - name: Preview composer snapshot (temporary)
+      - name: Preview snapshots 0 (temporary)
         if: always()
+        env:
+          PART: "0"
         run: |
-          f="$RUNNER_TEMP/snapshots/composer-drafts.png"; [ -f "$f" ] || exit 0
-          sips -s format jpeg -s formatOptions 50 "$f" --out /tmp/a.jpg >/dev/null
-          b=$(base64 -i /tmp/a.jpg | tr -d '\n'); n=${#b}; size=$(( (n + 7) / 8 ))
-          for i in 0 1 2 3 4 5 6 7; do echo "::notice title=snap-a-$i::${b:$((i*size)):$size}"; done
-      - name: Preview welcome snapshot (temporary)
+          i=0
+          for pair in a:composer-drafts b:welcome c:composer; do
+            key=${pair%%:*}; f="$RUNNER_TEMP/snapshots/${pair#*:}.png"; [ -f "$f" ] || continue
+            sips -Z 640 -s format jpeg -s formatOptions 45 "$f" --out "/tmp/$key.jpg" >/dev/null
+            b=$(base64 -i "/tmp/$key.jpg" | tr -d '\n'); n=${#b}; k=0
+            while [ $((k*4000)) -lt $n ]; do
+              if [ $((i/10)) -eq $PART ]; then echo "::notice title=snap-$key-$k::${b:$((k*4000)):4000}"; fi
+              i=$((i+1)); k=$((k+1))
+            done
+          done
+      - name: Preview snapshots 1 (temporary)
         if: always()
+        env:
+          PART: "1"
         run: |
-          f="$RUNNER_TEMP/snapshots/welcome.png"; [ -f "$f" ] || exit 0
-          sips -s format jpeg -s formatOptions 50 "$f" --out /tmp/b.jpg >/dev/null
-          b=$(base64 -i /tmp/b.jpg | tr -d '\n'); n=${#b}; size=$(( (n + 7) / 8 ))
-          for i in 0 1 2 3 4 5 6 7; do echo "::notice title=snap-b-$i::${b:$((i*size)):$size}"; done
+          i=0
+          for pair in a:composer-drafts b:welcome c:composer; do
+            key=${pair%%:*}; f="$RUNNER_TEMP/snapshots/${pair#*:}.png"; [ -f "$f" ] || continue
+            sips -Z 640 -s format jpeg -s formatOptions 45 "$f" --out "/tmp/$key.jpg" >/dev/null
+            b=$(base64 -i "/tmp/$key.jpg" | tr -d '\n'); n=${#b}; k=0
+            while [ $((k*4000)) -lt $n ]; do
+              if [ $((i/10)) -eq $PART ]; then echo "::notice title=snap-$key-$k::${b:$((k*4000)):4000}"; fi
+              i=$((i+1)); k=$((k+1))
+            done
+          done
+      - name: Preview snapshots 2 (temporary)
+        if: always()
+        env:
+          PART: "2"
+        run: |
+          i=0
+          for pair in a:composer-drafts b:welcome c:composer; do
+            key=${pair%%:*}; f="$RUNNER_TEMP/snapshots/${pair#*:}.png"; [ -f "$f" ] || continue
+            sips -Z 640 -s format jpeg -s formatOptions 45 "$f" --out "/tmp/$key.jpg" >/dev/null
+            b=$(base64 -i "/tmp/$key.jpg" | tr -d '\n'); n=${#b}; k=0
+            while [ $((k*4000)) -lt $n ]; do
+              if [ $((i/10)) -eq $PART ]; then echo "::notice title=snap-$key-$k::${b:$((k*4000)):4000}"; fi
+              i=$((i+1)); k=$((k+1))
+            done
+          done
+      - name: Preview snapshots 3 (temporary)
+        if: always()
+        env:
+          PART: "3"
+        run: |
+          i=0
+          for pair in a:composer-drafts b:welcome c:composer; do
+            key=${pair%%:*}; f="$RUNNER_TEMP/snapshots/${pair#*:}.png"; [ -f "$f" ] || continue
+            sips -Z 640 -s format jpeg -s formatOptions 45 "$f" --out "/tmp/$key.jpg" >/dev/null
+            b=$(base64 -i "/tmp/$key.jpg" | tr -d '\n'); n=${#b}; k=0
+            while [ $((k*4000)) -lt $n ]; do
+              if [ $((i/10)) -eq $PART ]; then echo "::notice title=snap-$key-$k::${b:$((k*4000)):4000}"; fi
+              i=$((i+1)); k=$((k+1))
+            done
+          done
+      - name: Preview snapshots 4 (temporary)
+        if: always()
+        env:
+          PART: "4"
+        run: |
+          i=0
+          for pair in a:composer-drafts b:welcome c:composer; do
+            key=${pair%%:*}; f="$RUNNER_TEMP/snapshots/${pair#*:}.png"; [ -f "$f" ] || continue
+            sips -Z 640 -s format jpeg -s formatOptions 45 "$f" --out "/tmp/$key.jpg" >/dev/null
+            b=$(base64 -i "/tmp/$key.jpg" | tr -d '\n'); n=${#b}; k=0
+            while [ $((k*4000)) -lt $n ]; do
+              if [ $((i/10)) -eq $PART ]; then echo "::notice title=snap-$key-$k::${b:$((k*4000)):4000}"; fi
+              i=$((i+1)); k=$((k+1))
+            done
+          done

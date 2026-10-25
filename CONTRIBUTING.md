@@ -6,7 +6,9 @@ Feeds, notifications, engagement, and external navigation must stay hidden.
 Run `swift test --disable-sandbox`, build with `./scripts/build-app.sh`, and
 run the packaged executable with `--self-test`. Rendering tests use synthetic
 pages and an isolated WebKit store. Never use a real public post as an automated
-test. Update the fixtures when changing surface recognition or navigation.
+test. Update the fixtures when changing surface recognition or navigation. For
+visual changes, set `MINIMAL_BIRD_SNAPSHOTS=/some/folder` with `--self-test` and
+look at the rendered window snapshots (CI uploads them as an artifact).
 
 Keep credentials, cookies, personal handles, diagnostics, signing certificates,
 and generated build files out of commits. Include the macOS and X layout/flow

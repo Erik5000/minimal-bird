@@ -252,6 +252,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         await load("""
             <main id="background"><article data-testid="tweet">Feed</article></main>
             <div role="dialog" id="composer" style="background:rgb(255,255,255)">
+              <div id="scrim" style="position:absolute;inset:0;background:rgba(0,0,0,0.4)"></div>
               <div id="panel" style="background:rgb(255,255,255);border:1px solid rgb(207,217,222);color:rgb(15,20,25)">
                 <button id="audience" style="color:rgb(29,155,240);border:1px solid rgb(207,217,222)">Everyone</button>
                 <div data-testid="tweetTextarea_0" contenteditable="true" id="editor" style="font-family:Georgia;color:rgb(15,20,25)">Read <span id="link" style="color:rgb(29,155,240)">example.com</span></div>
@@ -267,6 +268,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let accent = "rgb(184, 73, 46)", paper = "rgb(250, 249, 246)", line = "rgb(230, 228, 220)"
         try await check("X's accent becomes the app accent for Post and links", "getComputedStyle(document.querySelector('#post')).backgroundColor==='\(accent)' && getComputedStyle(document.querySelector('#link')).color==='\(accent)' && getComputedStyle(document.querySelector('#audience')).color==='\(accent)'")
         try await check("white panels take the warm page color with hairline borders", "getComputedStyle(document.querySelector('#panel')).backgroundColor==='\(paper)' && getComputedStyle(document.querySelector('#panel')).borderTopColor==='\(line)'")
+        try await check("a modal's dimming backdrop is cleared", "getComputedStyle(document.querySelector('#scrim')).backgroundColor==='rgba(0, 0, 0, 0)'")
         try await check("thread connectors become hairlines", "getComputedStyle(document.querySelector('#rule')).backgroundColor==='\(line)'")
         try await check("text uses the app's ink and muted tones", "getComputedStyle(document.querySelector('#editor')).color==='rgb(43, 50, 48)' && getComputedStyle(document.querySelector('#secondary')).color==='rgb(128, 132, 124)'")
         try await check("toolbar icons stay quiet", "getComputedStyle(document.querySelector('#tool')).color==='rgb(128, 132, 124)'")

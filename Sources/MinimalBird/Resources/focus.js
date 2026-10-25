@@ -237,6 +237,7 @@
     [data-mb-surface] [data-mb-fg="accent"], [data-mb-popover] [data-mb-fg="accent"] { color: var(--mb-accent) !important; }
     [data-mb-surface] [data-mb-bg="paper"], [data-mb-popover] [data-mb-bg="paper"] { background-color: var(--mb-paper) !important; }
     [data-mb-surface] [data-mb-bg="line"], [data-mb-popover] [data-mb-bg="line"] { background-color: var(--mb-line) !important; }
+    [data-mb-surface] [data-mb-bg="clear"] { background-color: transparent !important; }
     [data-mb-surface] [data-mb-bg="accent"], [data-mb-popover] [data-mb-bg="accent"] { background-color: var(--mb-accent) !important; }
     [data-mb-surface] [data-mb-bg="tint"], [data-mb-popover] [data-mb-bg="tint"] { background-color: var(--mb-tint) !important; }
     [data-mb-surface] [data-mb-bd="line"], [data-mb-popover] [data-mb-bd="line"] { border-color: var(--mb-line) !important; }
@@ -324,6 +325,9 @@
       const thin = node.offsetWidth > 0 && node.offsetHeight > 0 && (node.offsetWidth <= 4 || node.offsetHeight <= 2);
       if (thin) marks.push(['data-mb-bg', 'line']);
       else if (bg === 'light') marks.push(['data-mb-bg', 'paper']);
+    } else if ((bg === 'dark' || bg === 'grey') && background.a < 0.85
+        && node.offsetWidth >= innerWidth * 0.9 && node.offsetHeight >= innerHeight * 0.9) {
+      marks.push(['data-mb-bg', 'clear']); // A modal's dimming backdrop.
     }
     const bordered = ['Top', 'Right', 'Bottom', 'Left'].some(side =>
       parseFloat(computed[`border${side}Width`]) > 0 && computed[`border${side}Style`] !== 'none');
