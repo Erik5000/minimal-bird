@@ -20,3 +20,17 @@ jobs:
           name: window-snapshots
           path: ${{ runner.temp }}/snapshots
           if-no-files-found: ignore
+      - name: Preview composer snapshot (temporary)
+        if: always()
+        run: |
+          f="$RUNNER_TEMP/snapshots/composer-drafts.png"; [ -f "$f" ] || exit 0
+          sips -s format jpeg -s formatOptions 50 "$f" --out /tmp/a.jpg >/dev/null
+          b=$(base64 -i /tmp/a.jpg | tr -d '\n'); n=${#b}; size=$(( (n + 7) / 8 ))
+          for i in 0 1 2 3 4 5 6 7; do echo "::notice title=snap-a-$i::${b:$((i*size)):$size}"; done
+      - name: Preview welcome snapshot (temporary)
+        if: always()
+        run: |
+          f="$RUNNER_TEMP/snapshots/welcome.png"; [ -f "$f" ] || exit 0
+          sips -s format jpeg -s formatOptions 50 "$f" --out /tmp/b.jpg >/dev/null
+          b=$(base64 -i /tmp/b.jpg | tr -d '\n'); n=${#b}; size=$(( (n + 7) / 8 ))
+          for i in 0 1 2 3 4 5 6 7; do echo "::notice title=snap-b-$i::${b:$((i*size)):$size}"; done
