@@ -3,6 +3,7 @@
 
 import AppKit
 import WebKit
+import FocusCore
 
 /// Run with --self-test. Exercises the actual WebKit engine without credentials,
 /// network requests, or publishing anything. Assertions inspect computed CSS.

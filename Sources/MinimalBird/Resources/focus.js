@@ -225,7 +225,7 @@
     /* One calm skin over whatever layout X renders: a single composer, a
        thread, polls, link cards or media. Tones are measured from X's own
        computed colors (see applyTones), so no layout or class name is assumed. */
-    [data-mb-surface="composer"], [data-mb-surface="composer"] *,
+    [data-mb-surface], [data-mb-surface] *,
     [data-mb-popover], [data-mb-popover] * {
       font-family: var(--mb-font) !important;
       -webkit-font-smoothing: antialiased;
@@ -508,6 +508,7 @@
       if (root) {
         restrictSurface(root, 'login');
         showSurface(root, 'login');
+        applyTones([root]);
         report('login');
       } else {
         hideSurface();
@@ -827,8 +828,12 @@
       for (const [index, text] of posts.entries()) {
         let editor = editorsIn(surface)[index];
         if (!editor) {
-          const add = surface.querySelector('[data-testid="addButton"]');
-          if (!add || add.disabled || add.getAttribute('aria-disabled') === 'true') break;
+          // X enables + once the previous post has text, which can lag a moment.
+          const add = await waitFor(() => {
+            const button = surface?.querySelector('[data-testid="addButton"]');
+            return button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' ? button : null;
+          }, 1500);
+          if (!add) break;
           add.click();
           editor = await waitFor(() => surface?.isConnected && editorsIn(surface)[index], 2500);
           if (!editor) break;
