@@ -27,8 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateWindowTitle()
         window.delegate = self
         window.isReleasedWhenClosed = false
-        window.setFrameAutosaveName("ComposerWindow")
-        if !window.setFrameUsingName("ComposerWindow") { window.center() }
+        window.setFrameAutosaveName("ComposerWindow.v2")
+        if !window.setFrameUsingName("ComposerWindow.v2") { window.center() }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         controller.start(demo: CommandLine.arguments.contains("--demo"))

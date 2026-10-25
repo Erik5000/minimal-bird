@@ -46,6 +46,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     private var pendingDraft: Draft?
     private var restoringDraft = false
     private var persistTimer: Timer?
+    private var refreshTimer: Timer?
     var accountChanged: ((String) -> Void)?
 
     init(dataStore: WKWebsiteDataStore, drafts: DraftStore) {
@@ -360,7 +361,11 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             composerHadText = false
         } else { return }
         schedulePersist()
-        refreshDrafts()
+        // Typing saves continuously; the list catches up a moment later.
+        refreshTimer?.invalidate()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.refreshDrafts() }
+        }
     }
 
     private func deleteDraft(_ id: UUID) {

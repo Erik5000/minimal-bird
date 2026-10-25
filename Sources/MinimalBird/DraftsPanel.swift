@@ -23,6 +23,9 @@ final class DraftsPanel: NSView {
     private let list = NSStackView()
     private let empty = NSTextField(wrappingLabelWithString: "Text you write is saved here as you type, on this Mac only.")
     private var listHeight: NSLayoutConstraint!
+    private var drafts: [Draft] = []
+    private var current: UUID?
+    private var shownRows: [String] = []
     private var statusTimer: Timer?
     private static let rowHeight: CGFloat = 48
     private static let maxRows: CGFloat = 4.5
@@ -147,18 +150,32 @@ final class DraftsPanel: NSView {
     }
 
     func update(drafts: [Draft], current: UUID?) {
+        self.drafts = drafts
+        self.current = current
         count.stringValue = drafts.isEmpty ? "" : "\(drafts.count)"
         toggle.setAccessibilityValue(drafts.isEmpty ? "No drafts" : "\(drafts.count) drafts")
-        list.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        if isExpanded { rebuildRows() }
+    }
+
+    /// Rows exist only while the list is open, and are rebuilt only when what
+    /// they show changes, so saving on every keystroke stays cheap.
+    private func rebuildRows() {
         let now = Date()
-        for draft in drafts {
+        let rows = drafts.map { draft -> (Draft, String, Bool) in
             let isCurrent = draft.id == current
             let when = isCurrent ? "Editing now" : Self.relative.localizedString(for: draft.updated, relativeTo: now)
-            let threads = draft.posts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
-            let detail = threads > 1 ? "\(when) · \(threads) posts" : when
+            let posts = draft.posts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+            return (draft, posts > 1 ? "\(when) · \(posts) posts" : when, isCurrent)
+        }
+        let signature = rows.map { "\($0.0.id)|\($0.0.preview)|\($0.1)" }
+        guard signature != shownRows else { return }
+        shownRows = signature
+        list.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for (draft, detail, isCurrent) in rows {
             let row = DraftRow(title: draft.preview, detail: detail, isCurrent: isCurrent)
-            row.onOpen = { [weak self] in self?.onOpen?(draft.id) }
-            row.onDelete = { [weak self] in self?.onDelete?(draft.id) }
+            let id = draft.id
+            row.onOpen = { [weak self] in self?.onOpen?(id) }
+            row.onDelete = { [weak self] in self?.onDelete?(id) }
             list.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: list.widthAnchor).isActive = true
         }
@@ -168,6 +185,10 @@ final class DraftsPanel: NSView {
     func setExpanded(_ expanded: Bool) {
         guard expanded != isExpanded else { return }
         isExpanded = expanded
+        if expanded { rebuildRows() } else {
+            list.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            shownRows = []
+        }
         applyExpansion(animated: true)
         onToggle?(expanded)
     }
@@ -175,7 +196,7 @@ final class DraftsPanel: NSView {
     @objc private func toggleExpanded() { setExpanded(!isExpanded) }
 
     private func applyExpansion(animated: Bool) {
-        let rows = CGFloat(list.arrangedSubviews.count)
+        let rows = CGFloat(drafts.count)
         let height = !isExpanded ? 0 : rows == 0 ? 34 : min(rows, Self.maxRows) * Self.rowHeight + 6
         empty.isHidden = !isExpanded || rows > 0
         scroll.isHidden = !isExpanded
