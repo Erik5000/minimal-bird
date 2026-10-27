@@ -404,7 +404,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let exact = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
                                                       arguments: ["posts": ["Hello\nworld"]], in: nil, contentWorld: .page) as? String
         if exact != "ok" { print("Line-break fixture: \(await editorDetails(web))") }
-        try await check("restoring a draft replaces spaces with its saved line breaks", "\(exact == "ok") && document.querySelector('#editor').innerText==='Hello\\nworld'")
+        try await check("restoring a draft replaces spaces with its saved line breaks", "\(exact == "ok") && window.__minimalBirdDraftSnapshot().posts[0]==='Hello\\nworld'")
         let spaced = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
                                                        arguments: ["posts": ["  Hello  world  "]], in: nil, contentWorld: .page) as? String
         try await check("draft restoration preserves repeated and edge spaces", "\(spaced == "ok") && document.querySelector('#editor').innerText.replace(/\\u00a0/g,' ')==='  Hello  world  '")
@@ -415,6 +415,12 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await js("document.querySelector('#editor').innerHTML='<div data-block=\"true\">  First  line  </div><div data-block=\"true\"><br></div><div data-block=\"true\">Last line</div><div data-block=\"true\"><br></div>';window.__minimalBirdReportDraft()")
         try await Task.sleep(for: .milliseconds(50))
         expect("Draft.js text preserves blank lines and spaces without layout breaks", lastDraft()?["posts"] as? [String] == ["  First  line  \n\nLast line\n"])
+        try await js("document.querySelector('#editor').innerHTML='<span>  First  line  </span><div><br></div><div>Last line</div><div><br></div>';window.__minimalBirdReportDraft()")
+        try await Task.sleep(for: .milliseconds(50))
+        expect("native paragraphs preserve blank lines and edge spaces", lastDraft()?["posts"] as? [String] == ["  First  line  \n\nLast line\n"])
+        try await js("document.querySelector('#editor').innerHTML='<p><br></p><p>First<br>Second</p>';window.__minimalBirdReportDraft()")
+        try await Task.sleep(for: .milliseconds(50))
+        expect("native paragraphs preserve leading blank lines and explicit breaks", lastDraft()?["posts"] as? [String] == ["\nFirst\nSecond"])
     }
 
     /// Exercise the real controller/store bridge, not just the injected script.
@@ -521,7 +527,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             print("Native thread fixture: \(fullPanel.status); \(await editorDetails(fullPage))")
             throw error
         }
-        expect("native activation restores every thread post with line breaks", (try await fullPage.evaluateJavaScript("JSON.stringify([...document.querySelectorAll('[contenteditable=true]')].map(e=>e.innerText))===JSON.stringify(['Line one\\nLine two','Second post',''])")) as? Bool == true)
+        expect("native activation restores every thread post with line breaks", (try await fullPage.evaluateJavaScript("JSON.stringify(window.__minimalBirdDraftSnapshot().posts)===JSON.stringify(['Line one\\nLine two','Second post',''])")) as? Bool == true)
         expect("thread restoration activates Add post through its native key handler", (try await fullPage.evaluateJavaScript("window.nativeAddKeys===2")) as? Bool == true)
         expect("thread restoration never activates Post", (try await fullPage.evaluateJavaScript("!window.nativeSubmissions")) as? Bool == true)
         expect("thread restoration blocks Enter after unexpected focus changes", (try await fullPage.evaluateJavaScript("window.restoreFocusGuard")) as? Bool == true)

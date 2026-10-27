@@ -6,7 +6,12 @@ opened account. It checks the active account first. A read error, timeout, disk
 error, or unfinished restoration cancels quitting. Sign-out uses the same
 editor capture before clearing the session.
 
-Validation: 14 unit tests and all 148 WebKit/native UI checks passed, including
+The macOS 15 CI run also exposed an extra layout newline in WebKit's
+`innerText` for native paragraphs. Draft capture now reads paragraph and line
+break nodes directly. It preserves real blank lines and edge spaces without
+adding the display-only newline. Draft.js blocks keep their existing reader.
+
+Validation: 14 unit tests and all 150 WebKit/native UI checks passed, including
 the rendered-window checks. The suite covers native input immediately followed
 by quit, concurrent leave requests, failed reads and writes, timeout, retry,
 and sign-out capture failure. A separate disposable app test exercised the

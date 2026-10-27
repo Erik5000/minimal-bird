@@ -153,13 +153,32 @@
     const normalized = normalizedText(text);
     return normalized.trim() ? normalized : '';
   };
+  function editableText(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue;
+    if (node.nodeName === 'BR') return '\n';
+    // A sole BR keeps an empty contenteditable paragraph open. It is not a
+    // second line. Keep the paragraph itself when joining its siblings.
+    if (node.childNodes.length === 1 && node.firstChild.nodeName === 'BR') return '';
+    let text = '', previousBlock = false, hasChild = false;
+    for (const child of node.childNodes) {
+      if (![Node.TEXT_NODE, Node.ELEMENT_NODE].includes(child.nodeType)) continue;
+      const block = ['DIV', 'P'].includes(child.nodeName);
+      if (hasChild && (block || previousBlock)) text += '\n';
+      text += editableText(child);
+      previousBlock = block;
+      hasChild = true;
+    }
+    return text;
+  }
   function postText(editor) {
     // Draft.js uses one block per line. innerText adds layout breaks around
     // empty blocks, so it does not represent the text X actually stores.
     const blocks = [...editor.querySelectorAll('[data-block="true"]')];
     return draftText(blocks.length
       ? blocks.map(block => block.textContent || '').join('\n')
-      : editor.innerText || '');
+      // Older WebKit appends a layout newline to native DIV paragraphs in
+      // innerText. Read their boundaries without trimming real saved lines.
+      : editableText(editor));
   }
 
   /// Sends the composer's text to the native app, which keeps it as a local
