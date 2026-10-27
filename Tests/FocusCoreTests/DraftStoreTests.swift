@@ -49,7 +49,7 @@ final class DraftStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = DraftStore(url: url)
         let id = try XCTUnwrap(store.save(["Line one\nLine two", "Second post"], id: nil))
-        store.persist()
+        try store.persist().get()
         let permissions = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
         XCTAssertEqual(permissions, 0o600)
         let reopened = DraftStore(url: url)
@@ -63,6 +63,31 @@ final class DraftStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("not json".utf8).write(to: url)
         XCTAssertTrue(DraftStore(url: url).drafts.isEmpty)
+    }
+
+    func testFailedSaveReportsErrorAndCanBeRetried() throws {
+        let url = temporaryURL()
+        let directory = url.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // A file where the parent directory should be forces a real write error.
+        try Data().write(to: directory)
+        let store = DraftStore(url: url)
+        let id = try XCTUnwrap(store.save(["Keep this text"], id: nil))
+        XCTAssertThrowsError(try store.persist().get())
+        XCTAssertEqual(store.draft(id)?.posts, ["Keep this text"])
+        try FileManager.default.removeItem(at: directory)
+        try store.persist().get()
+        XCTAssertEqual(DraftStore(url: url).draft(id)?.posts, ["Keep this text"])
+    }
+
+    func testPartialRestoreDoesNotEvictOriginalAtLimit() throws {
+        let store = DraftStore(url: nil)
+        let original = try XCTUnwrap(store.save(["First", "Second"], id: nil, now: .distantPast))
+        for index in 1..<DraftStore.limit { store.save(["Other \(index)"], id: nil) }
+        let partial = try XCTUnwrap(store.save(["First edited"], id: nil, preserving: original))
+        XCTAssertEqual(store.drafts.count, DraftStore.limit)
+        XCTAssertEqual(store.draft(original)?.posts, ["First", "Second"])
+        XCTAssertEqual(store.draft(partial)?.posts, ["First edited"])
     }
 
     func testOldestDraftsAreDroppedAtTheLimit() {

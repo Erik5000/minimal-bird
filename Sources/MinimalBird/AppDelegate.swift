@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow!
     private var controller: ComposerController!
     private var testRunner: WebSmokeTests?
+    private var terminationPending = false
     private lazy var accounts = AccountProfiles()
     private var controllers: [UUID: ComposerController] = [:]
     private var accountsMenu = NSMenu(title: "Accounts")
@@ -110,9 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let menu = NSMenu()
         fillAccountsMenu(menu)
         menu.addItem(.separator())
-        for (title, action, key) in [("New post", #selector(ComposerController.newPost), "n"),
+        for (title, action, key) in [("New draft", #selector(ComposerController.newPost), "n"),
+                                     ("Save draft", #selector(ComposerController.saveDraft), "s"),
                                      ("Reload X", #selector(ComposerController.reloadPage), "r"),
-                                     (controller.draftsExpanded ? "Hide Drafts" : "Show Drafts", #selector(ComposerController.toggleDrafts), "d")] {
+                                     ("Draft library", #selector(ComposerController.showDraftLibrary), "d")] {
             let item = menu.addItem(withTitle: title, action: action, keyEquivalent: key)
             item.target = controller
         }
@@ -204,12 +206,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(editItem)
         let fileItem = NSMenuItem()
         let file = NSMenu(title: "File")
-        let newPost = file.addItem(withTitle: "New post", action: #selector(ComposerController.newPost), keyEquivalent: "n")
+        let newPost = file.addItem(withTitle: "New draft", action: #selector(ComposerController.newPost), keyEquivalent: "n")
         newPost.target = controller
+        let saveDraft = file.addItem(withTitle: "Save draft", action: #selector(ComposerController.saveDraft), keyEquivalent: "s")
+        saveDraft.target = controller
         let reload = file.addItem(withTitle: "Reload X", action: #selector(ComposerController.reloadPage), keyEquivalent: "r")
         reload.target = controller
         file.addItem(.separator())
-        let toggleDrafts = file.addItem(withTitle: "Show or Hide Drafts", action: #selector(ComposerController.toggleDrafts), keyEquivalent: "d")
+        let toggleDrafts = file.addItem(withTitle: "Draft library", action: #selector(ComposerController.showDraftLibrary), keyEquivalent: "d")
         toggleDrafts.target = controller
         file.addItem(.separator())
         file.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -298,19 +302,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         controllers.values.forEach { $0.persistDrafts() }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        for profile in accounts.profiles {
-            guard let candidate = controllers[profile.id] else { continue }
-            displayController(candidate)
-            if !candidate.confirmDiscard() {
-                accounts.select(profile.id)
-                controller = candidate
-                buildMenu()
-                updateWindowTitle()
-                window.makeKeyAndOrderFront(nil)
-                controller.restoreEditorFocus()
-                return .terminateCancel
+        guard !terminationPending else { return .terminateLater }
+        terminationPending = true
+        // Capture the active editor before changing the window's controller.
+        let profiles = accounts.profiles.filter { $0.id == accounts.selectedID }
+            + accounts.profiles.filter { $0.id != accounts.selectedID }
+        Task { @MainActor in
+            for profile in profiles {
+                guard let candidate = controllers[profile.id] else { continue }
+                displayController(candidate)
+                let canLeave = await withCheckedContinuation { continuation in
+                    candidate.prepareToLeave { continuation.resume(returning: $0) }
+                }
+                if !canLeave {
+                    accounts.select(profile.id)
+                    controller = candidate
+                    buildMenu()
+                    updateWindowTitle()
+                    window.makeKeyAndOrderFront(nil)
+                    controller.restoreEditorFocus()
+                    terminationPending = false
+                    sender.reply(toApplicationShouldTerminate: false)
+                    return
+                }
             }
+            sender.reply(toApplicationShouldTerminate: true)
         }
-        return .terminateNow
+        return .terminateLater
     }
 }

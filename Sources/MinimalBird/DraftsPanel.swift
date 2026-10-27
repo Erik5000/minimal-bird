@@ -4,74 +4,83 @@
 import AppKit
 import FocusCore
 
-/// The strip below the composer: a "Drafts" disclosure with a short list of
-/// saved drafts, and a quiet status line. Its controls never take keyboard
-/// focus, so typing always stays in the composer.
+/// Explicit composer actions and a full-window library of saved text drafts.
 @MainActor
 final class DraftsPanel: NSView {
     var onOpen: ((UUID) -> Void)?
     var onDelete: ((UUID) -> Void)?
+    var onCopy: ((UUID) -> Void)?
     var onToggle: ((Bool) -> Void)?
+    var onSave: (() -> Void)?
+    var onNew: (() -> Void)?
+    var onLibrary: (() -> Void)?
+    var onResume: (() -> Void)?
     private(set) var isExpanded: Bool
-
-    private let toggle = NSButton()
-    private let chevron = NSImageView()
-    private let title = NSTextField(labelWithString: "Drafts")
-    private let count = NSTextField(labelWithString: "")
+    private let libraryButton = NSButton(title: "Draft library", target: nil, action: nil)
+    private let newButton = NSButton(title: "New draft", target: nil, action: nil)
+    private let saveButton = NSButton(title: "Save draft", target: nil, action: nil)
+    private let resumeButton = NSButton(title: "Back to editor", target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "")
+    private let heading = NSTextField(labelWithString: "Draft library")
+    private let detail = NSTextField(labelWithString: "Text drafts on this Mac")
+    private let search = NSSearchField()
     private let scroll = NSScrollView()
     private let list = NSStackView()
-    private let empty = NSTextField(wrappingLabelWithString: "Text you write is saved here as you type, on this Mac only.")
-    private var listHeight: NSLayoutConstraint!
+    private let empty = NSTextField(wrappingLabelWithString: "")
+    private var compactHeight: NSLayoutConstraint!
+    private var libraryBottom: NSLayoutConstraint!
     private var drafts: [Draft] = []
     private var current: UUID?
     private var shownRows: [String] = []
     private var statusTimer: Timer?
-    private static let rowHeight: CGFloat = 48
-    private static let maxRows: CGFloat = 4.5
-    private static let relative: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter
-    }()
+    private var persistentStatus = ""
+    private var busy = false
+    private var canSave = false
 
     init(expanded: Bool) {
         isExpanded = expanded
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = Palette.paper.cgColor
-
         let rule = NSView()
         rule.wantsLayer = true
         rule.layer?.backgroundColor = Palette.line.cgColor
-
-        chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)
-        chevron.symbolConfiguration = .init(pointSize: 9, weight: .bold)
-        chevron.contentTintColor = Palette.muted
-        title.font = .systemFont(ofSize: 12, weight: .semibold)
-        title.textColor = Palette.ink
-        count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        count.textColor = Palette.muted
+        let actions = NSStackView(views: [libraryButton, resumeButton, NSView(), newButton, saveButton])
+        actions.orientation = .horizontal
+        actions.spacing = 8
+        for button in [libraryButton, newButton, saveButton, resumeButton] {
+            button.bezelStyle = .push
+            button.controlSize = .large
+            button.font = .systemFont(ofSize: 12, weight: .medium)
+            button.target = self
+            button.setContentHuggingPriority(.required, for: .horizontal)
+        }
+        libraryButton.action = #selector(openLibrary)
+        newButton.action = #selector(newDraft)
+        saveButton.action = #selector(saveDraft)
+        resumeButton.action = #selector(resumeDraft)
+        saveButton.bezelColor = Palette.accent
+        saveButton.toolTip = "Save the current text and return to Draft library (⌘S)"
+        newButton.toolTip = "Save the current text and start a new draft (⌘N)"
+        libraryButton.toolTip = "Save the current text and open Draft library (⌘D)"
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = Palette.muted
-        statusLabel.alignment = .right
         statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        // A transparent button covers the disclosure label for a large hit area.
-        toggle.title = ""
-        toggle.isBordered = false
-        toggle.isTransparent = true
-        toggle.refusesFirstResponder = true
-        toggle.target = self
-        toggle.action = #selector(toggleExpanded)
-        toggle.setAccessibilityLabel("Drafts")
-        toggle.toolTip = "Show or hide drafts (⌘D)"
-
+        heading.font = .systemFont(ofSize: 24, weight: .semibold)
+        heading.textColor = Palette.ink
+        detail.font = .systemFont(ofSize: 12)
+        detail.textColor = Palette.muted
+        search.placeholderString = "Search drafts"
+        search.setAccessibilityLabel("Search drafts")
+        search.target = self
+        search.action = #selector(searchChanged)
+        search.sendsSearchStringImmediately = true
+        empty.font = .systemFont(ofSize: 14)
+        empty.textColor = Palette.muted
+        empty.alignment = .center
         list.orientation = .vertical
         list.alignment = .leading
-        list.spacing = 0
-        list.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 6, right: 0)
+        list.spacing = 8
         let document = FlippedView()
         document.addSubview(list)
         scroll.documentView = document
@@ -79,41 +88,37 @@ final class DraftsPanel: NSView {
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
-        scroll.scrollerStyle = .overlay
-        empty.font = .systemFont(ofSize: 12)
-        empty.textColor = Palette.muted
-
-        for child in [rule, chevron, title, count, statusLabel, toggle, scroll, empty] {
+        for child in [rule, actions, statusLabel, heading, detail, search, scroll, empty] {
             child.translatesAutoresizingMaskIntoConstraints = false
             addSubview(child)
         }
         list.translatesAutoresizingMaskIntoConstraints = false
         document.translatesAutoresizingMaskIntoConstraints = false
-        listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
+        compactHeight = heightAnchor.constraint(equalToConstant: 82)
+        libraryBottom = scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16)
         NSLayoutConstraint.activate([
             rule.topAnchor.constraint(equalTo: topAnchor),
             rule.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             rule.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             rule.heightAnchor.constraint(equalToConstant: 1),
-            chevron.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
-            chevron.centerYAnchor.constraint(equalTo: topAnchor, constant: 20),
-            chevron.widthAnchor.constraint(equalToConstant: 10),
-            title.leadingAnchor.constraint(equalTo: chevron.trailingAnchor, constant: 7),
-            title.centerYAnchor.constraint(equalTo: chevron.centerYAnchor),
-            count.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: 6),
-            count.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
-            toggle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            toggle.trailingAnchor.constraint(equalTo: count.trailingAnchor, constant: 8),
-            toggle.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            toggle.heightAnchor.constraint(equalToConstant: 28),
-            statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: toggle.trailingAnchor, constant: 12),
-            statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
-            statusLabel.centerYAnchor.constraint(equalTo: chevron.centerYAnchor),
-            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 40),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
-            listHeight,
+            actions.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            actions.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            actions.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            actions.heightAnchor.constraint(equalToConstant: 32),
+            statusLabel.topAnchor.constraint(equalTo: actions.bottomAnchor, constant: 8),
+            statusLabel.leadingAnchor.constraint(equalTo: actions.leadingAnchor),
+            statusLabel.trailingAnchor.constraint(equalTo: actions.trailingAnchor),
+            heading.topAnchor.constraint(equalTo: topAnchor, constant: 96),
+            heading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            detail.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 6),
+            detail.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
+            search.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 20),
+            search.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
+            search.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            search.heightAnchor.constraint(equalToConstant: 28),
+            scroll.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 16),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
@@ -121,196 +126,153 @@ final class DraftsPanel: NSView {
             list.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             list.trailingAnchor.constraint(equalTo: document.trailingAnchor),
             list.bottomAnchor.constraint(equalTo: document.bottomAnchor),
-            empty.topAnchor.constraint(equalTo: scroll.topAnchor, constant: 2),
-            empty.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 37),
-            empty.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -20)
+            empty.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 40),
+            empty.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 32),
+            empty.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -32)
         ])
-        applyExpansion(animated: false)
+        applyMode()
     }
 
     required init?(coder: NSCoder) { fatalError("Use init(expanded:)") }
-
+    override var acceptsFirstResponder: Bool { true }
     var status: String {
         get { statusLabel.stringValue }
-        set { statusTimer?.invalidate(); statusLabel.stringValue = newValue }
+        set {
+            statusTimer?.invalidate()
+            statusTimer = nil
+            persistentStatus = newValue
+            statusLabel.stringValue = newValue
+        }
     }
-
-    /// A short confirmation that fades back to the persistent status.
     func flash(_ message: String) {
-        let previous = statusTimer == nil ? statusLabel.stringValue : ""
         statusTimer?.invalidate()
         statusLabel.stringValue = message
         statusTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.statusLabel.stringValue == message else { return }
-                self.statusLabel.stringValue = previous
+                self.statusLabel.stringValue = self.persistentStatus
                 self.statusTimer = nil
             }
         }
     }
-
     func update(drafts: [Draft], current: UUID?) {
         self.drafts = drafts
         self.current = current
-        count.stringValue = drafts.isEmpty ? "" : "\(drafts.count)"
-        toggle.setAccessibilityValue(drafts.isEmpty ? "No drafts" : "\(drafts.count) drafts")
+        detail.stringValue = "\(drafts.count) \(drafts.count == 1 ? "draft" : "drafts") · Text saved on this Mac"
         if isExpanded { rebuildRows() }
     }
-
-    /// Rows exist only while the list is open, and are rebuilt only when what
-    /// they show changes, so saving on every keystroke stays cheap.
-    private func rebuildRows() {
-        let now = Date()
-        let rows = drafts.map { draft -> (Draft, String, Bool) in
-            let isCurrent = draft.id == current
-            let when = isCurrent ? "Editing now" : Self.relative.localizedString(for: draft.updated, relativeTo: now)
-            let posts = draft.posts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
-            return (draft, posts > 1 ? "\(when) · \(posts) posts" : when, isCurrent)
-        }
-        let signature = rows.map { "\($0.0.id)|\($0.0.preview)|\($0.1)" }
-        guard signature != shownRows else { return }
-        shownRows = signature
-        list.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for (draft, detail, isCurrent) in rows {
-            let row = DraftRow(title: draft.preview, detail: detail, isCurrent: isCurrent)
-            let id = draft.id
-            row.onOpen = { [weak self] in self?.onOpen?(id) }
-            row.onDelete = { [weak self] in self?.onDelete?(id) }
-            list.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: list.widthAnchor).isActive = true
-        }
-        applyExpansion(animated: false)
+    func updateActions(canSave: Bool, busy: Bool) {
+        self.canSave = canSave
+        self.busy = busy
+        saveButton.isEnabled = canSave && !busy
+        for button in [newButton, libraryButton, resumeButton] { button.isEnabled = !busy }
+        search.isEnabled = !busy
     }
-
     func setExpanded(_ expanded: Bool) {
         guard expanded != isExpanded else { return }
         isExpanded = expanded
-        if expanded { rebuildRows() } else {
-            list.arrangedSubviews.forEach { $0.removeFromSuperview() }
-            shownRows = []
-        }
-        applyExpansion(animated: true)
+        applyMode()
+        if expanded { rebuildRows() }
         onToggle?(expanded)
     }
-
-    @objc private func toggleExpanded() { setExpanded(!isExpanded) }
-
-    private func applyExpansion(animated: Bool) {
-        let rows = CGFloat(drafts.count)
-        let height = !isExpanded ? 0 : rows == 0 ? 34 : min(rows, Self.maxRows) * Self.rowHeight + 6
-        empty.isHidden = !isExpanded || rows > 0
-        scroll.isHidden = !isExpanded
-        chevron.image = NSImage(systemSymbolName: isExpanded ? "chevron.down" : "chevron.right", accessibilityDescription: nil)
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                context.allowsImplicitAnimation = true
-                listHeight.animator().constant = height
-                superview?.layoutSubtreeIfNeeded()
-            }
-        } else {
-            listHeight.constant = height
+    private func applyMode() {
+        compactHeight.isActive = !isExpanded
+        libraryBottom.isActive = isExpanded
+        libraryButton.isHidden = isExpanded
+        saveButton.isHidden = isExpanded
+        resumeButton.isHidden = !isExpanded
+        for child in [heading, detail, search, scroll, empty] { child.isHidden = !isExpanded }
+        updateActions(canSave: canSave, busy: busy)
+    }
+    private func rebuildRows() {
+        let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visible = drafts.filter { query.isEmpty || $0.posts.joined(separator: "\n").localizedCaseInsensitiveContains(query) }
+        let signature = visible.map { "\($0.id)|\($0.updated)|\($0.posts)|\($0.id == current)" }
+        empty.stringValue = drafts.isEmpty ? "No drafts yet. Write a post, then choose Save draft." : "No drafts match your search."
+        empty.isHidden = !isExpanded || !visible.isEmpty
+        guard signature != shownRows else { return }
+        shownRows = signature
+        list.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for draft in visible {
+            let row = DraftRow(draft: draft)
+            row.onOpen = { [weak self] in self?.onOpen?(draft.id) }
+            row.onDelete = { [weak self] in self?.onDelete?(draft.id) }
+            row.onCopy = { [weak self] in self?.onCopy?(draft.id) }
+            list.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: list.widthAnchor).isActive = true
         }
     }
+    @objc private func openLibrary() { onLibrary?() }
+    @objc private func newDraft() { onNew?() }
+    @objc private func saveDraft() { onSave?() }
+    @objc private func resumeDraft() { onResume?() }
+    @objc private func searchChanged() { rebuildRows() }
 }
 
 private final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// One draft: its first line, when it was saved, and a delete button on hover.
 @MainActor
 private final class DraftRow: NSView {
     var onOpen: (() -> Void)?
     var onDelete: (() -> Void)?
-    private let isCurrent: Bool
-    private let highlight = NSView()
-    private let delete = NSButton()
-    private var hovering = false { didSet { refresh() } }
-
-    init(title: String, detail: String, isCurrent: Bool) {
-        self.isCurrent = isCurrent
+    var onCopy: (() -> Void)?
+    init(draft: Draft) {
         super.init(frame: .zero)
-        let marker = NSView()
-        marker.wantsLayer = true
-        marker.layer?.cornerRadius = 3
-        marker.layer?.backgroundColor = (isCurrent ? Palette.accent : Palette.line).cgColor
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = .systemFont(ofSize: 13, weight: isCurrent ? .medium : .regular)
-        titleLabel.textColor = Palette.ink
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let detailLabel = NSTextField(labelWithString: detail)
-        detailLabel.font = .systemFont(ofSize: 11)
-        detailLabel.textColor = isCurrent ? Palette.accent : Palette.muted
-        highlight.wantsLayer = true
-        highlight.layer?.cornerRadius = 8
-        delete.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Delete draft")
-        delete.symbolConfiguration = .init(pointSize: 11, weight: .regular)
-        delete.isBordered = false
-        delete.refusesFirstResponder = true
-        delete.contentTintColor = Palette.muted
-        delete.target = self
-        delete.action = #selector(deleteDraft)
-        delete.toolTip = "Delete draft"
-        for child in [highlight, marker, titleLabel, detailLabel, delete] {
+        wantsLayer = true
+        layer?.backgroundColor = Palette.hover.cgColor
+        layer?.cornerRadius = 12
+        let title = NSTextField(labelWithString: draft.preview)
+        title.font = .systemFont(ofSize: 15, weight: .semibold)
+        title.textColor = Palette.ink
+        title.lineBreakMode = .byTruncatingTail
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let preview = NSTextField(wrappingLabelWithString: draft.posts.joined(separator: "\n\n"))
+        preview.font = .systemFont(ofSize: 12)
+        preview.textColor = Palette.muted
+        preview.maximumNumberOfLines = 2
+        preview.lineBreakMode = .byTruncatingTail
+        preview.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let posts = draft.posts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+        let when = DateFormatter.localizedString(from: draft.updated, dateStyle: .short, timeStyle: .short)
+        let detail = NSTextField(labelWithString: "\(posts) \(posts == 1 ? "post" : "posts") · Saved \(when)")
+        detail.font = .systemFont(ofSize: 10)
+        detail.textColor = Palette.muted
+        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let edit = NSButton(title: "Edit", target: self, action: #selector(editDraft))
+        let delete = NSButton(title: "Delete", target: self, action: #selector(deleteDraft))
+        for button in [edit, delete] { button.bezelStyle = .push; button.controlSize = .regular }
+        edit.setAccessibilityLabel("Edit draft: \(draft.preview)")
+        delete.setAccessibilityLabel("Delete draft: \(draft.preview)")
+        let actions = NSStackView(views: [edit, delete])
+        actions.spacing = 6
+        for child in [title, preview, detail, actions] {
             child.translatesAutoresizingMaskIntoConstraints = false
             addSubview(child)
         }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 48),
-            highlight.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
-            highlight.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            highlight.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            marker.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            marker.centerYAnchor.constraint(equalTo: centerYAnchor),
-            marker.widthAnchor.constraint(equalToConstant: 6),
-            marker.heightAnchor.constraint(equalToConstant: 6),
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 29),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: delete.leadingAnchor, constant: -8),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 7),
-            detailLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            detailLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
-            delete.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            delete.centerYAnchor.constraint(equalTo: centerYAnchor),
-            delete.widthAnchor.constraint(equalToConstant: 22),
-            delete.heightAnchor.constraint(equalToConstant: 22)
+            heightAnchor.constraint(equalToConstant: 126),
+            title.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            title.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            preview.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 6),
+            preview.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            preview.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+            preview.heightAnchor.constraint(equalToConstant: 32),
+            detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            detail.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
+            detail.trailingAnchor.constraint(lessThanOrEqualTo: actions.leadingAnchor, constant: -8),
+            actions.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            actions.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10)
         ])
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel(isCurrent ? "\(title), being edited" : "Open draft: \(title)")
-        toolTip = isCurrent ? nil : "Open this draft"
-        refresh()
+        let context = NSMenu()
+        let copy = context.addItem(withTitle: "Copy draft text", action: #selector(copyDraft), keyEquivalent: "")
+        copy.target = self
+        menu = context
     }
-
-    required init?(coder: NSCoder) { fatalError("Use init(title:detail:isCurrent:)") }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-                                       owner: self, userInfo: nil))
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovering = true }
-    override func mouseExited(with event: NSEvent) { hovering = false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) {}
-    override func mouseUp(with event: NSEvent) {
-        guard !isCurrent, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
-        onOpen?()
-    }
-    override func accessibilityPerformPress() -> Bool {
-        guard !isCurrent else { return false }
-        onOpen?()
-        return true
-    }
-
+    required init?(coder: NSCoder) { fatalError("Use init(draft:)") }
+    @objc private func editDraft() { onOpen?() }
     @objc private func deleteDraft() { onDelete?() }
-
-    private func refresh() {
-        highlight.layer?.backgroundColor = (hovering && !isCurrent ? Palette.hover : .clear).cgColor
-        delete.isHidden = isCurrent || !hovering
-    }
+    @objc private func copyDraft() { onCopy?() }
 }

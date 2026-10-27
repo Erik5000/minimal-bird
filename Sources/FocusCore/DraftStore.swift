@@ -58,7 +58,7 @@ public final class DraftStore {
     /// Saves `posts` under `id`, or as a new draft when `id` is nil or unknown.
     /// Text-free posts remove the draft instead. Returns the draft's id.
     @discardableResult
-    public func save(_ posts: [String], id: UUID?, now: Date = Date()) -> UUID? {
+    public func save(_ posts: [String], id: UUID?, now: Date = Date(), preserving protectedID: UUID? = nil) -> UUID? {
         guard Draft.hasText(posts) else {
             if let id { remove(id) }
             return nil
@@ -74,7 +74,9 @@ public final class DraftStore {
         }
         let draft = Draft(id: id ?? UUID(), posts: posts, updated: now)
         insert(draft)
-        if drafts.count > Self.limit { drafts.removeLast(drafts.count - Self.limit) }
+        while drafts.count > Self.limit, let index = drafts.lastIndex(where: { $0.id != protectedID && $0.id != draft.id }) {
+            drafts.remove(at: index)
+        }
         dirty = true
         return draft.id
     }
@@ -89,20 +91,24 @@ public final class DraftStore {
         if drafts.count != count { dirty = true }
     }
 
-    /// Writes pending changes atomically, readable only by this user.
-    public func persist() {
-        guard dirty, let url else { return }
+    /// Writes pending changes atomically, readable only by this user. A failed
+    /// write keeps the changes pending so the caller can report it and retry.
+    @discardableResult
+    public func persist() -> Result<Void, Error> {
+        guard dirty else { return .success(()) }
+        guard let url else { dirty = false; return .success(()) }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(drafts) else { return }
         do {
+            let data = try encoder.encode(drafts)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
             try data.write(to: url, options: [.atomic])
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             dirty = false
+            return .success(())
         } catch {
-            // Keep the changes in memory; the next persist() tries again.
+            return .failure(error)
         }
     }
 }

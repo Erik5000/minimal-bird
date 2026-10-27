@@ -9,7 +9,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: swift test --disable-sandbox
-      - run: bash -n scripts/*.sh
+      - run: for file in scripts/*.sh; do bash -n "$file" || exit; done
+      - run: node --check Sources/MinimalBird/Resources/focus.js
       - run: ./scripts/build-app.sh --universal
       - run: '"build/Minimal Bird.app/Contents/MacOS/MinimalBird" --self-test'
         env:

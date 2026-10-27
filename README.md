@@ -25,25 +25,32 @@ Sign in with your X username/email and password and complete any verification X 
 
 Write and attach images/video using the composer, then click **Post** yourself. X handles uploads, limits, account permissions, and submission. When X closes the composer after submission, the app shows a quiet finish screen. It does not independently verify publication or retrieve engagement.
 
-- **⌘N:** New post. The current text stays in Drafts.
-- **⌘D:** Show or hide the Drafts list below the composer.
+- **Save draft / ⌘S:** Save the current text and return to Draft library.
+- **New draft / ⌘N:** Save the current text and open a blank composer.
+- **Draft library / ⌘D:** Save the current text and open your saved drafts.
 - **⌘R:** Reload X; your text is put back afterwards.
 - **⌘W / close button:** Hide the window while keeping the session and draft ready.
 - **Dock icon / Window → Show Composer:** Reopen the window.
 - **⌘Q:** Quit. Text stays in Drafts; the app only asks when attachments or a poll would be lost.
 - **⌘Z / ⇧⌘Z:** Undo / redo.
-- **Account name in the title bar:** Switch accounts, **Add account…**, New post, Reload, Drafts, and **Sign out…**.
+- **Account name in the title bar:** Switch accounts, **Add account…**, New draft, Save draft, Reload, Draft library, and **Sign out…**.
 - **⌘1 through ⌘9:** Switch to one of the first nine saved accounts.
 
 ## Drafts
 
-Everything you type is saved as a draft while you write, including every post of a thread. Drafts are kept per account in a private file on this Mac (`~/Library/Application Support/Minimal Bird/Drafts`, readable only by you) and are never sent anywhere by the app. They survive quitting, crashes, and sign-out.
+Text you type is kept as a draft while you write, including every post of a thread. Drafts are kept per account in a private file on this Mac (`~/Library/Application Support/Minimal Bird/Drafts`, readable only by you) and are never sent anywhere by the app. Changes are written about every 0.6 seconds during typing and flushed before quitting, reloading, or signing out. An abrupt crash can lose changes since the last successful write. If a disk save fails, the app shows a warning and blocks those actions. Keep the app open while you resolve the storage problem, or use **Copy all drafts** in the warning to save the text elsewhere.
 
-Click **Drafts** at the bottom of the window (or press ⌘D) to open the list. The draft you are editing is marked; click any other draft to put its text back into X's editor, and hover to delete one. A thread draft is restored post by post using X's own **+** button. Clearing the composer deletes its draft, and a draft is removed when X closes the composer after you click **Post**. Attachments and polls stay with X and are not kept in drafts. These are separate from X's own server-side drafts.
+The composer has visible **Save draft**, **New draft**, and **Draft library** buttons. Save draft reads every current post directly from the editor, writes the text to disk, then opens the library. New draft uses the same save step before opening a blank composer. If the editor cannot be read or the disk write fails, the app keeps the editor open and shows an error.
+
+The library shows each draft's text preview, post count, and save time. Use **Search drafts** to find text. Click **Edit** to reopen a draft, make changes, and click **Save draft** to update the same entry. **Back to editor** returns to the current composer. Click **Delete** and confirm to remove a draft. Clearing an editor no longer deletes its saved text. A draft is also removed when X closes the composer after you click **Post**.
+
+A thread draft is restored post by post using X's own **+** button. Attachments and polls are not stored in the library. Save draft keeps them in the open editor; New draft warns before removing them. These local text drafts are separate from X's own server-side drafts.
+
+If X can open only part of a thread, the full original stays in Draft library. Edits to the visible posts are saved separately. Control-click a draft and choose **Copy draft text** to recover all its posts. Restoring a draft preserves line breaks and spaces within nonempty posts. Whitespace-only posts reopen as empty editors. New draft, reload, and quit wait until restoration ends.
 
 For multiple accounts, choose **Add account…** and sign in once in the new session. Each account uses a separate persistent WebKit store. Switching keeps previously opened composers warm and preserves their drafts while the app runs. Your original sign-in is retained, and the active handle appears in the window title when multiple accounts are saved. Sign out clears only the selected account's session; its menu slot can be used to sign in again. These sessions are independent of account switching in another browser. Account handles and store identifiers are saved locally in app preferences, outside the repository.
 
-On quit, the app checks every opened account for attachments or polls that would be lost. Sessions and drafts survive relaunching. Keeping several accounts open uses more memory because each retains its own web view.
+On quit, the app reads the latest editor text and waits for a successful disk save for every opened account. A failed or timed-out read cancels quitting. It also checks for attachments or polls that would be lost. Sign-out uses the same save check. Sessions and drafts survive relaunching. Keeping several accounts open uses more memory because each retains its own web view.
 
 Window position and size are remembered.
 
@@ -63,7 +70,7 @@ Attachment detection includes images, videos, and previews painted as CSS backgr
 
 The first opening after quitting still loads X's full web application and depends on X and your connection. Hiding its UI does not make its JavaScript bundle smaller.
 
-While the app stays running, closing/reopening the window keeps the WebKit process and loaded assets. **New post** uses X's existing navigation when available, with a full-load fallback. The newer sign-in flow's composer modal is recognized in place, avoiding an unnecessary second load. The filter also reuses the recognized surface and changes keyboard isolation only when needed.
+While the app stays running, closing/reopening the window keeps the WebKit process and loaded assets. **New draft** saves the current text, then loads a fresh composer so drafts stay separate. The newer sign-in flow's composer modal is recognized in place, avoiding an unnecessary second load. The filter also reuses the recognized surface and changes keyboard isolation only when needed.
 
 A document-start curtain hides the page until a recognized sign-in form or composer is present. Native navigation and client-side routes are restricted. Background elements are invisible and inert. Unknown layouts stay covered and show a retry screen. The core composer exposes media upload, polls, emoji, and reply controls where X supports them; browsing-oriented and scheduling controls are hidden. Reply settings and emoji pickers opened from the composer are recognized as separate authoring popups. Their search/selection controls remain available without revealing the surrounding page. Unknown advanced dialogs may still remain hidden.
 
@@ -87,7 +94,7 @@ The live sign-in and composer were checked during development. Version 0.6.0 als
 
 ## Sharing and distribution
 
-The repository contains source, the original icon generator and preview, tests, a macOS CI workflow, and the GNU GPL v3.0 license. Generated apps, build caches, logs, environment files, and local settings are ignored. Cookies and credentials are stored outside the repository by WebKit.
+The repository contains source, the original icon generator and preview, tests, a macOS CI workflow, and the GNU GPL v3.0 license. Generated apps, build caches, launch previews, logs, environment files, and local settings are ignored. Cookies and credentials are stored outside the repository by WebKit.
 
 The default build produces a locally ad-hoc-signed app for personal use. Quit Minimal Bird before updating it; the installer verifies and replaces the complete bundle. This project does not include certificates, signing secrets, or an updater.
 

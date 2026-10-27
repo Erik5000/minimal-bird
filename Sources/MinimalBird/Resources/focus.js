@@ -5,6 +5,8 @@
   'use strict';
   if (window.__minimalBirdInstalled) return;
   window.__minimalBirdInstalled = true;
+  const documentID = crypto.randomUUID();
+  window.__minimalBirdDocumentID = documentID;
 
   const composerPaths = new Set(['/compose/post', '/compose/tweet']);
   const loginPaths = new Set(['/login', '/i/flow/login', '/i/jf/onboarding/web', '/account/access',
@@ -20,6 +22,7 @@
   let scheduled = false;
   let internalNavigation = false;
   let lastDraft = null;
+  let lastInputAt = 0;
   let pendingMedia = false;
   let restoring = false;
   const inertNodes = new Set();
@@ -34,7 +37,7 @@
   let lastSelection = null;
 
   function post(message) {
-    window.webkit?.messageHandlers?.focus?.postMessage(message);
+    window.webkit?.messageHandlers?.focus?.postMessage({ ...message, documentID });
   }
 
   function editable(node) {
@@ -84,6 +87,13 @@
   });
 
   function requestPopover(trigger, pressStart = false) {
+    // Adding a thread post mounts dormant audience controls too. It does not
+    // authorize a popup: exposing that portal steals focus from the new editor.
+    // This guard covers mouse, keyboard, and saved-thread restoration alike.
+    if (trigger.matches('[data-testid="addButton"]')) {
+      popupRequest = null;
+      return;
+    }
     if (!pressStart && popupRequest?.trigger === trigger && performance.now() <= popupRequest.until) return;
     popupRequest = { trigger, until: performance.now() + 1500,
       existing: new Set([...document.querySelectorAll(popoverSelector)].filter(node => node.getClientRects().length)) };
@@ -138,16 +148,26 @@
     post(message);
   }
 
+  const normalizedText = text => text.replace(/\r\n?/g, '\n').replace(/ /g, ' ');
+  const draftText = text => {
+    const normalized = normalizedText(text);
+    return normalized.trim() ? normalized : '';
+  };
   function postText(editor) {
-    return (editor.innerText || '').replace(/ /g, ' ').replace(/^\n+|\s+$/g, '');
+    // Draft.js uses one block per line. innerText adds layout breaks around
+    // empty blocks, so it does not represent the text X actually stores.
+    const blocks = [...editor.querySelectorAll('[data-block="true"]')];
+    return draftText(blocks.length
+      ? blocks.map(block => block.textContent || '').join('\n')
+      : editor.innerText || '');
   }
 
   /// Sends the composer's text to the native app, which keeps it as a local
   /// draft. `extras` marks content a text draft cannot keep (media, polls).
-  function updateDraft(force = false) {
-    if (restoring || !surface?.isConnected) return;
+  function draftSnapshot() {
+    if (restoring || finished || !surface?.isConnected || routeOf(location.href) !== 'composer') return null;
     const editors = editorsIn(surface);
-    if (!editors.length) return;
+    if (!editors.length) return null;
     const posts = editors.map(postText);
     const attachments = hasAuthoringMedia(surface);
     const fileInputs = new Set([...surface.querySelectorAll('input[type="file"]'),
@@ -159,11 +179,30 @@
       || [...surface.querySelectorAll('[contenteditable="true"]')].some(field => !editors.some(editor => editor === field
         || editor.contains(field) || field.contains(editor)) && field.textContent.trim().length > 0);
     const dirty = extras || posts.some(text => text.trim().length > 0);
+    return { state: 'draft', dirty, extras, posts, documentID };
+  }
+  function updateDraft(force = false) {
+    const snapshot = draftSnapshot();
+    if (!snapshot) return;
+    const { dirty, extras, posts } = snapshot;
     const key = JSON.stringify([dirty, extras, posts]);
     if (!force && key === lastDraft) return;
     lastDraft = key;
-    post({ state: 'draft', dirty, extras, posts });
+    post(snapshot);
   }
+  window.__minimalBirdDraftSnapshot = draftSnapshot;
+  window.__minimalBirdReadDraft = async () => {
+    // Native input can still be reaching WebKit when Save is clicked. Keep
+    // the editor focused until that input has settled, then read every post.
+    const started = performance.now();
+    do {
+      await new Promise(resolve => setTimeout(resolve, 40));
+    } while (performance.now() - started < 120
+      || (performance.now() - lastInputAt < 80 && performance.now() - started < 600));
+    return window.__minimalBirdDraftSnapshot();
+  };
+  window.__minimalBirdReportDraft = () => updateDraft(true);
+  window.__minimalBirdRefresh = () => { lastState = ''; scheduleScan(); };
 
   const style = document.createElement('style');
   style.id = 'minimal-bird-curtain';
@@ -706,6 +745,7 @@
   }, true);
 
   document.addEventListener('input', event => {
+    lastInputAt = performance.now();
     if (!surface?.contains(event.target) || !surface.querySelector(editorSelector)) return;
     // DraftJS can commit its DOM after the input handler. Read after the event,
     // and let the mutation scan confirm the final rendered text as a backup.
@@ -791,7 +831,6 @@
       await pause(40);
     }
   }
-  const comparable = text => text.replace(/\s+/g, ' ').trim();
 
   function selectContents(editor) {
     const range = document.createRange();
@@ -800,13 +839,35 @@
     selection.removeAllRanges(); selection.addRange(range);
   }
 
-  /// Replaces one editor's text the way a person would: select everything and
-  /// paste. X's editor keeps its own model, line breaks and character count.
-  async function insertInto(editor, text) {
-    if (comparable(postText(editor)) === comparable(text)) return true;
+  /// Select the editor text, then request native text input when the app owns
+  /// the restoration. Standalone fixtures use a synthetic editing fallback.
+  async function insertInto(editor, text, restoreToken, index) {
+    if (postText(editor) === draftText(text)) return true;
     editor.focus({ preventScroll: true });
     selectContents(editor);
     await pause(50); // Let the editor observe the new selection first.
+    if (restoreToken) {
+      post({ state: 'restoreText', token: restoreToken, index });
+      const matches = () => {
+        const current = surface?.isConnected && editorsIn(surface)[index];
+        return current && postText(current) === draftText(text);
+      };
+      const matched = await waitFor(matches, 1500);
+      if (window.__minimalBirdDiagnose) post({ state: 'diagnostic', details: JSON.stringify({
+        restoreIndex: index, matched: !!matched, editors: (surface ? editorsIn(surface) : []).map(node => ({
+          length: postText(node).length, rawLength: node.innerText.length,
+          blocks: [...node.querySelectorAll('[data-block]')].map(block => ({
+            value: block.getAttribute('data-block'), length: block.textContent.length
+          })),
+          tags: [...node.querySelectorAll('*')].map(child => child.tagName).slice(0, 30),
+          focused: node === document.activeElement, connected: node.isConnected
+        }))
+      }) });
+      if (!matched) return false;
+      // Check again after X has committed its controlled editor state.
+      await pause(80);
+      return !!matches();
+    }
     const before = postText(editor);
     const transfer = new DataTransfer();
     transfer.setData('text/plain', text);
@@ -818,12 +879,12 @@
       document.execCommand('insertText', false, text);
       await pause(20);
     }
-    return comparable(postText(editor)) === comparable(text);
+    return postText(editor) === draftText(text);
   }
 
   /// Native drafts call this with a list of posts. Returns 'ok', 'partial',
   /// 'failed', 'reload' (the composer already holds a thread) or 'unavailable'.
-  window.__minimalBirdInsertPosts = async posts => {
+  window.__minimalBirdInsertPosts = async (posts, restoreToken = null) => {
     if (!Array.isArray(posts) || !posts.length || posts.some(text => typeof text !== 'string')) return 'failed';
     const ready = await waitFor(() => routeOf(location.href) === 'composer' && surface?.isConnected
       && editorsIn(surface).length > 0, 4000);
@@ -831,6 +892,16 @@
     if (editorsIn(surface).length > 1) return 'reload';
     restoring = true;
     let inserted = 0;
+    let activationTarget = null;
+    const guardActivation = event => {
+      const submit = event.type === 'click' && event.target.closest?.(postSelector);
+      const strayActivation = ['Enter', ' '].includes(event.key) && event.target !== activationTarget;
+      if (submit || strayActivation) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    for (const type of ['click', 'keydown', 'keyup']) window.addEventListener(type, guardActivation, true);
     try {
       for (const [index, text] of posts.entries()) {
         let editor = editorsIn(surface)[index];
@@ -841,14 +912,21 @@
             return button && !button.disabled && button.getAttribute('aria-disabled') !== 'true' ? button : null;
           }, 1500);
           if (!add) break;
-          add.click();
+          if (restoreToken) {
+            activationTarget = add;
+            add.focus({ preventScroll: true });
+            if (document.activeElement !== add) break;
+            post({ state: 'restoreAdd', token: restoreToken, index });
+          } else { add.click(); }
           editor = await waitFor(() => surface?.isConnected && editorsIn(surface)[index], 2500);
+          activationTarget = null;
           if (!editor) break;
         }
-        if (!(await insertInto(editor, text))) break;
+        if (!(await insertInto(editor, text, restoreToken, index))) break;
         inserted += 1;
       }
     } finally {
+      for (const type of ['click', 'keydown', 'keyup']) window.removeEventListener(type, guardActivation, true);
       restoring = false;
       updateDraft(true);
     }

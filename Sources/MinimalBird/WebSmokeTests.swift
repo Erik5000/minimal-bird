@@ -78,6 +78,11 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         print("\(value ? "PASS" : "FAIL"): \(title)")
     }
 
+    private func expect(_ title: String, _ passed: Bool) {
+        if !passed { failures += 1 }
+        print("\(passed ? "PASS" : "FAIL"): \(title)")
+    }
+
     private func exercise() async throws {
         let fixture = """
         <header role="banner"><button id="notifications">Notifications 99</button><a id="newPost" data-testid="SideNav_NewTweet_Button" href="/compose/post">New post</a></header>
@@ -165,6 +170,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await exerciseThreadsAndDrafts()
         try await exerciseAuthoring()
         try await checkAccountStores()
+        try await exerciseNativeDraftRecovery()
     }
 
     private func exerciseFocusAndPopovers() async throws {
@@ -282,10 +288,20 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     private func exerciseThreadsAndDrafts() async throws {
+        // Popup focus recovery runs only in an active document. A detached web
+        // view would miss the live bug even if it detected the exposed popup.
+        let originalFrame = web.frame
+        let window = NSWindow(contentRect: originalFrame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = web
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(web)
+        NSApp.activate(ignoringOtherApps: true)
+        defer { window.contentView = nil; window.close(); web.frame = originalFrame }
         let thread = """
             <main id="background"><article data-testid="tweet">Feed</article></main>
             <div role="dialog" id="composer">
-              <div id="posts"><div data-testid="tweetTextarea_0" contenteditable="true" id="editor"></div></div>
+              <div id="posts"><div data-testid="tweetTextarea_0" contenteditable="true" id="editor" style="white-space:pre-wrap"></div></div>
               <div data-testid="toolBar"><button id="media" aria-label="Add photos or video">Media</button>
                 <button data-testid="addButton" id="add" aria-label="Add post">+</button></div>
               <button data-testid="tweetButton" id="post">Post</button>
@@ -295,15 +311,38 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
               // Like X, add a post and focus it on a later tick.
               document.querySelector('#add').onclick = () => {
                 const editor = document.createElement('div');
-                editor.dataset.testid = 'tweetTextarea_' + next++; editor.contentEditable = 'true'; editor.style.minHeight = '20px';
+                editor.dataset.testid = 'tweetTextarea_' + next++; editor.contentEditable = 'true'; editor.style.minHeight = '20px'; editor.style.whiteSpace = 'pre-wrap';
                 document.querySelector('#posts').appendChild(editor);
-                setTimeout(() => editor.focus(), 30);
+                setTimeout(() => {
+                  editor.focus();
+                  // X also mounts a dormant audience portal during thread
+                  // changes. Add post did not request this popup.
+                  document.querySelector('#dormantAudienceHost')?.remove();
+                  const host = document.createElement('div'); host.id = 'dormantAudienceHost';
+                  host.style.cssText = 'opacity:0;pointer-events:none';
+                  host.innerHTML = '<div role="listbox" tabindex="0" id="dormantAudience"><button>Everyone</button></div>';
+                  document.body.appendChild(host);
+                }, 30);
               };
             </script>
             """
         await load(thread, path: "/compose/post")
+        // App activation and WebKit focus cross process boundaries. Wait for
+        // the real focused document before exercising popup recovery.
+        for _ in 0..<50 {
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(web)
+            NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+            try await js("document.querySelector('#editor').focus()")
+            if (try await js("document.hasFocus()")) as? Bool == true { break }
+            try await Task.sleep(for: .milliseconds(40))
+        }
         try await js("{const e=document.querySelector('#editor');e.focus();e.textContent='First post';e.dispatchEvent(new Event('input',{bubbles:true}))}")
         try await Task.sleep(for: .milliseconds(50))
+        if (try await js("document.hasFocus()")) as? Bool != true {
+            print("Thread fixture focus: active=\(NSApp.isActive), key=\(window.isKeyWindow), visible=\(window.isVisible), responder=\(String(describing: window.firstResponder)), frame=\(web.frame)")
+        }
+        try await check("thread regression runs with document focus", "document.hasFocus()")
         if lastDraft()?["posts"] as? [String] != ["First post"] || lastDraft()?["extras"] as? Bool != false {
             failures += 1; print("FAIL: composer text is reported for local drafts")
         } else { print("PASS: composer text is reported for local drafts") }
@@ -313,7 +352,8 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await Task.sleep(for: .milliseconds(80))
         try await js("window.__minimalBirdFocusEditor()")
         try await check("a newly added thread post keeps keyboard focus", "document.activeElement.dataset.testid==='tweetTextarea_1'")
-        try await js("{const e=document.activeElement;e.textContent='Second post';e.dispatchEvent(new Event('input',{bubbles:true}))}")
+        try await check("Add post does not expose a dormant audience popup", "getComputedStyle(document.querySelector('#dormantAudience')).visibility==='hidden' && !!document.querySelector('#dormantAudience').closest('[inert]')")
+        try await js("document.execCommand('insertText',false,'Second post')")
         try await Task.sleep(for: .milliseconds(50))
         if lastDraft()?["posts"] as? [String] != ["First post", "Second post"] {
             failures += 1; print("FAIL: every post of a thread is reported in order")
@@ -349,6 +389,292 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let pasted = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
                                                        arguments: ["posts": ["Only once"]], in: nil, contentWorld: .page) as? String
         try await check("editors that handle paste receive the text exactly once", "\(pasted == "ok") && window.fixturePastes===1 && document.querySelector('#editor').textContent==='Only once'")
+
+        await load(thread, path: "/compose/post")
+        try await js("document.querySelector('#editor').textContent='Hello world';void 0")
+        let exact = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
+                                                      arguments: ["posts": ["Hello\nworld"]], in: nil, contentWorld: .page) as? String
+        try await check("restoring a draft replaces spaces with its saved line breaks", "\(exact == "ok") && document.querySelector('#editor').innerText==='Hello\\nworld'")
+        let spaced = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
+                                                       arguments: ["posts": ["  Hello  world  "]], in: nil, contentWorld: .page) as? String
+        try await check("draft restoration preserves repeated and edge spaces", "\(spaced == "ok") && document.querySelector('#editor').innerText.replace(/\\u00a0/g,' ')==='  Hello  world  '")
+
+        try await js("document.querySelector('#editor').innerHTML='<div data-block=\"true\"><br></div>';window.__minimalBirdReportDraft()")
+        try await Task.sleep(for: .milliseconds(50))
+        expect("an empty Draft.js block has no saved layout newline", lastDraft()?["posts"] as? [String] == [""])
+        try await js("document.querySelector('#editor').innerHTML='<div data-block=\"true\">  First  line  </div><div data-block=\"true\"><br></div><div data-block=\"true\">Last line</div><div data-block=\"true\"><br></div>';window.__minimalBirdReportDraft()")
+        try await Task.sleep(for: .milliseconds(50))
+        expect("Draft.js text preserves blank lines and spaces without layout breaks", lastDraft()?["posts"] as? [String] == ["  First  line  \n\nLast line\n"])
+    }
+
+    /// Exercise the real controller/store bridge, not just the injected script.
+    /// Everything lives in disposable stores and synthetic windows.
+    private func exerciseNativeDraftRecovery() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MinimalBirdRecovery-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let previousExpansion = UserDefaults.standard.object(forKey: "DraftsExpanded")
+        var windows: [NSWindow] = []
+        defer {
+            windows.forEach { $0.close() }
+            UserDefaults.standard.set(previousExpansion, forKey: "DraftsExpanded")
+            try? FileManager.default.removeItem(at: folder)
+        }
+        func waitFor(_ condition: () async throws -> Bool) async throws {
+            for _ in 0..<150 {
+                if try await condition() { return }
+                try await Task.sleep(for: .milliseconds(40))
+            }
+            throw NSError(domain: "Draft recovery fixture timed out", code: 1)
+        }
+        func prepareToLeave(_ controller: ComposerController) async -> Bool {
+            await withCheckedContinuation { continuation in
+                controller.prepareToLeave { continuation.resume(returning: $0) }
+            }
+        }
+        func composer(_ store: DraftStore, threaded: Bool = false) async throws -> (ComposerController, WKWebView, DraftsPanel) {
+            let controller = ComposerController(dataStore: .nonPersistent(), drafts: store)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 660),
+                                  styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.contentViewController = controller
+            window.setContentSize(NSSize(width: 580, height: 660))
+            window.isReleasedWhenClosed = false
+            windows.append(window)
+            window.makeKeyAndOrderFront(nil)
+            let page = controller.view.subviews.compactMap { $0 as? WKWebView }.first!
+            let panel = controller.view.subviews.compactMap { $0 as? DraftsPanel }.first!
+            controller.showFixture("""
+                <!doctype html><html><body><div role="dialog">
+                <div id="postEditors"><div id="editor" data-testid="tweetTextarea_0" contenteditable="true" style="white-space:pre-wrap"></div></div>
+                \(threaded ? "<button id='add' data-testid='addButton'>+</button>" : "")
+                <button data-testid="tweetButton" onclick="window.nativeSubmissions=(window.nativeSubmissions||0)+1">Post</button>
+                </div><script>
+                window.nativeAddKeys=0;
+                const add=document.querySelector('#add');
+                if(add) {
+                  add.onkeydown=event=>{
+                    if(event.key!==' ') return;
+                    window.nativeAddKeys++;
+                    const submit=document.querySelector('[data-testid="tweetButton"]');
+                    const stray=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true});
+                    submit.dispatchEvent(stray);window.restoreFocusGuard=stray.defaultPrevented;
+                    submit.click();
+                  };
+                  add.onclick=()=>{
+                    const editor=document.createElement('div');editor.contentEditable='true';
+                    editor.dataset.testid='tweetTextarea_'+document.querySelectorAll('[contenteditable=true]').length;
+                    editor.style.whiteSpace='pre-wrap';document.querySelector('#postEditors').appendChild(editor);editor.focus();
+                  };
+                }
+                </script></body></html>
+                """)
+            try await waitFor {
+                guard !page.isHidden else { return false }
+                return (try? await page.evaluateJavaScript("!!document.querySelector('[data-mb-surface]')")) as? Bool == true
+            }
+            return (controller, page, panel)
+        }
+
+        let store = DraftStore(url: folder.appendingPathComponent("partial.json"))
+        let original = store.save(["First post", "Second post", "Third post"], id: nil)!
+        let (controller, page, panel) = try await composer(store)
+        // The person may switch apps while a draft is opening. Restoration
+        // must still reach its own web view without requiring a key window.
+        controller.view.window?.orderOut(nil)
+        expect("draft restore fixture covers a background window", controller.view.window?.isKeyWindow == false)
+        _ = try await page.evaluateJavaScript("window.fixtureNativeInputs=0;document.querySelector('#editor').addEventListener('beforeinput',()=>window.fixtureNativeInputs++);void 0")
+        panel.onOpen?(original) // No add-post button: only the first post can open.
+        expect("leaving during draft restoration is blocked", !controller.confirmDiscard())
+        try await waitFor { store.drafts.count == 2 }
+        expect("draft restoration uses WebKit native text input", (try await page.evaluateJavaScript("window.fixtureNativeInputs>0")) as? Bool == true)
+        _ = try await page.evaluateJavaScript("document.querySelector('#editor').textContent='First post edited';document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}));void 0")
+        try await waitFor { store.drafts.contains { $0.posts == ["First post edited"] } }
+        expect("partial thread edits retain every post in the original draft", store.draft(original)?.posts == ["First post", "Second post", "Third post"])
+        expect("partial recovery can be saved before leaving", controller.confirmDiscard())
+        expect("full and partial drafts both survive reopening", DraftStore(url: folder.appendingPathComponent("partial.json")).drafts.count == 2)
+        panel.setExpanded(true)
+        // Check that the recovery command is present without touching the
+        // user's clipboard during a self-test.
+        func hasCopyCommand(_ view: NSView) -> Bool {
+            view.menu?.items.contains(where: { $0.title == "Copy draft text" }) == true
+                || view.subviews.contains(where: hasCopyCommand)
+        }
+        expect("saved drafts expose a copy-text recovery command", hasCopyCommand(panel))
+
+        let fullStore = DraftStore(url: nil)
+        let fullID = fullStore.save(["Line one\nLine two", "Second post", "\n"], id: nil)!
+        let (fullController, fullPage, fullPanel) = try await composer(fullStore, threaded: true)
+        fullController.view.window?.orderOut(nil)
+        fullPanel.onOpen?(fullID)
+        try await waitFor { fullStore.draft(fullID)?.posts == ["Line one\nLine two", "Second post", ""] }
+        expect("native activation restores every thread post with line breaks", (try await fullPage.evaluateJavaScript("JSON.stringify([...document.querySelectorAll('[contenteditable=true]')].map(e=>e.innerText))===JSON.stringify(['Line one\\nLine two','Second post',''])")) as? Bool == true)
+        expect("thread restoration activates Add post through its native key handler", (try await fullPage.evaluateJavaScript("window.nativeAddKeys===2")) as? Bool == true)
+        expect("thread restoration never activates Post", (try await fullPage.evaluateJavaScript("!window.nativeSubmissions")) as? Bool == true)
+        expect("thread restoration blocks Enter after unexpected focus changes", (try await fullPage.evaluateJavaScript("window.restoreFocusGuard")) as? Bool == true)
+        expect("a fully restored thread keeps its original draft identity", fullStore.drafts.count == 1 && fullStore.draft(fullID) != nil)
+
+        let blocked = folder.appendingPathComponent("not-a-directory")
+        try Data().write(to: blocked)
+        let failedStore = DraftStore(url: blocked.appendingPathComponent("drafts.json"))
+        let (unsaved, failedPage, failedPanel) = try await composer(failedStore)
+        _ = try await failedPage.evaluateJavaScript("document.querySelector('#editor').textContent='Keep this text';document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}));void 0")
+        try await waitFor { failedStore.drafts.count == 1 }
+        expect("native persistence reports a disk error", !unsaved.persistDrafts())
+        expect("disk save failure remains visible", failedPanel.status.contains("not saved"))
+        failedPanel.status = ""
+        unsaved.saveDraft()
+        try await waitFor { failedPanel.status.contains("not saved") }
+        expect("Save draft keeps the editor open after a disk error", !failedPanel.isExpanded && !failedPage.isHidden)
+        let quitAfterDiskError = await prepareToLeave(unsaved)
+        expect("quit is cancelled when the current draft cannot be written", !quitAfterDiskError && !failedPage.isHidden)
+        var showedSaveAlert = false
+        let dismissal = Timer(timeInterval: 0.1, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                if NSApp.modalWindow != nil { showedSaveAlert = true; NSApp.abortModal() }
+            }
+        }
+        RunLoop.main.add(dismissal, forMode: .modalPanel)
+        let canLeave = unsaved.confirmDiscard()
+        dismissal.invalidate()
+        expect("save failure shows a warning and blocks quit or reload", showedSaveAlert && !canLeave)
+        try FileManager.default.removeItem(at: blocked)
+        expect("saving and leaving recover after the disk error is fixed", unsaved.confirmDiscard())
+        expect("failed-save recovery retains the exact text", DraftStore(url: blocked.appendingPathComponent("drafts.json")).drafts.first?.posts == ["Keep this text"])
+
+        let continuousURL = folder.appendingPathComponent("continuous.json")
+        let continuousStore = DraftStore(url: continuousURL)
+        let (typing, typingPage, _) = try await composer(continuousStore)
+        for index in 0..<8 {
+            _ = try await typingPage.evaluateJavaScript("document.querySelector('#editor').textContent='Continuous typing \(index)';document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}));void 0")
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        expect("continuous typing writes drafts without an idle gap", !DraftStore(url: continuousURL).drafts.isEmpty)
+        expect("leaving flushes the latest typed text", typing.confirmDiscard()
+            && DraftStore(url: continuousURL).drafts.first?.posts == ["Continuous typing 7"])
+
+        // Exercise actual buttons, including a text change made inside the
+        // snapshot call before any queued draft message can reach the app.
+        func button(_ title: String, in view: NSView) -> NSButton? {
+            if let button = view as? NSButton, button.title == title { return button }
+            return view.subviews.lazy.compactMap { button(title, in: $0) }.first
+        }
+        let libraryURL = folder.appendingPathComponent("library.json")
+        let libraryStore = DraftStore(url: libraryURL)
+        let (_, libraryPage, libraryPanel) = try await composer(libraryStore, threaded: true)
+        _ = try await libraryPage.evaluateJavaScript("document.querySelector('#editor').textContent='Cached text';document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}));void 0")
+        try await waitFor { libraryStore.drafts.count == 1 }
+        let libraryID = libraryStore.drafts[0].id
+        _ = try await libraryPage.evaluateJavaScript("""
+            const readSnapshot=window.__minimalBirdDraftSnapshot;
+            window.__minimalBirdDraftSnapshot=()=>{
+              document.querySelector('#editor').textContent='Saved from button\\nSecond line';
+              window.__minimalBirdDraftSnapshot=readSnapshot;
+              return readSnapshot();
+            };void 0
+            """)
+        button("Save draft", in: libraryPanel)?.performClick(nil)
+        try await waitFor { libraryPanel.isExpanded }
+        expect("Save draft reads the latest editor text before leaving", DraftStore(url: libraryURL).draft(libraryID)?.posts == ["Saved from button\nSecond line"])
+        expect("Save draft opens a library with visible Edit and Delete buttons", button("Edit", in: libraryPanel) != nil && button("Delete", in: libraryPanel) != nil)
+        expect("Save draft reports success only after the disk write", libraryPanel.status == "Saved to Draft library.")
+        _ = try await libraryPage.evaluateJavaScript("window.webkit.messageHandlers.focus.postMessage({state:'draft',documentID:window.__minimalBirdDocumentID,posts:[''],dirty:false,extras:false});window.webkit.messageHandlers.focus.postMessage({state:'finished',documentID:'obsolete-document'});void 0")
+        try await Task.sleep(for: .milliseconds(80))
+        expect("late page messages cannot erase a draft from the library", libraryStore.draft(libraryID)?.posts == ["Saved from button\nSecond line"])
+        button("Edit", in: libraryPanel)?.performClick(nil)
+        expect("Edit returns to the saved draft's editor", !libraryPanel.isExpanded)
+        _ = try await libraryPage.evaluateJavaScript("document.querySelector('#editor').textContent='Edited saved draft';document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}));void 0")
+        button("Save draft", in: libraryPanel)?.performClick(nil)
+        try await waitFor { libraryPanel.isExpanded }
+        expect("editing and saving updates one library draft", DraftStore(url: libraryURL).drafts.count == 1 && DraftStore(url: libraryURL).draft(libraryID)?.posts == ["Edited saved draft"])
+        button("New draft", in: libraryPanel)?.performClick(nil)
+        try await waitFor { !libraryPanel.isExpanded && !libraryPage.isHidden }
+        expect("New draft opens an empty editor without deleting the saved draft", (try await libraryPage.evaluateJavaScript("document.querySelector('#editor').textContent===''")) as? Bool == true && DraftStore(url: libraryURL).draft(libraryID) != nil)
+        button("Draft library", in: libraryPanel)?.performClick(nil)
+        try await waitFor { libraryPanel.isExpanded }
+        button("Edit", in: libraryPanel)?.performClick(nil)
+        try await waitFor { libraryPanel.status == "Draft opened" }
+        expect("Edit restores a saved draft after New draft", (try await libraryPage.evaluateJavaScript("document.querySelector('#editor').textContent==='Edited saved draft'")) as? Bool == true)
+        _ = try await libraryPage.evaluateJavaScript("document.querySelector('#editor').textContent='';document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}));void 0")
+        button("Save draft", in: libraryPanel)?.performClick(nil)
+        try await waitFor { libraryPanel.isExpanded }
+        expect("clearing the editor does not delete a saved library draft", DraftStore(url: libraryURL).draft(libraryID)?.posts == ["Edited saved draft"])
+        button("Edit", in: libraryPanel)?.performClick(nil)
+        try await waitFor { libraryPanel.status == "Draft opened" }
+        _ = try await libraryPage.evaluateJavaScript("window.__minimalBirdDraftSnapshot=()=>null;void 0")
+        button("New draft", in: libraryPanel)?.performClick(nil)
+        try await waitFor { libraryPanel.status.contains("Could not read the editor") }
+        let retainedText = (try await libraryPage.evaluateJavaScript("document.querySelector('#editor').textContent==='Edited saved draft'")) as? Bool == true
+        expect("New draft stays put when the editor snapshot is unavailable", !libraryPanel.isExpanded && retainedText)
+        libraryPanel.setExpanded(true)
+        func searchField(in view: NSView) -> NSSearchField? {
+            (view as? NSSearchField) ?? view.subviews.lazy.compactMap { searchField(in: $0) }.first
+        }
+        let search = searchField(in: libraryPanel)!
+        search.stringValue = "No matching draft"
+        search.sendAction(search.action, to: search.target)
+        expect("the draft library filters saved text", button("Edit", in: libraryPanel) == nil)
+        search.stringValue = "Edited saved"
+        search.sendAction(search.action, to: search.target)
+        expect("a matching library draft has an explicit Edit action", button("Edit", in: libraryPanel) != nil)
+        func answerDelete(_ answer: NSApplication.ModalResponse) {
+            let dismissal = Timer(timeInterval: 0.05, repeats: true) { _ in
+                MainActor.assumeIsolated { if NSApp.modalWindow != nil { NSApp.stopModal(withCode: answer) } }
+            }
+            RunLoop.main.add(dismissal, forMode: .modalPanel)
+            button("Delete", in: libraryPanel)?.performClick(nil)
+            dismissal.invalidate()
+        }
+        answerDelete(.alertFirstButtonReturn)
+        expect("cancelling Delete preserves the saved draft", DraftStore(url: libraryURL).draft(libraryID) != nil)
+        answerDelete(.alertSecondButtonReturn)
+        expect("confirmed Delete removes only the selected saved draft", libraryStore.drafts.isEmpty && DraftStore(url: libraryURL).drafts.isEmpty)
+
+        let quitURL = folder.appendingPathComponent("quit-input.json")
+        let quitStore = DraftStore(url: quitURL)
+        let (quitting, quitPage, quitPanel) = try await composer(quitStore)
+        _ = try await quitPage.evaluateJavaScript("document.querySelector('#editor').textContent='Saved before';document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}));void 0")
+        try await waitFor { quitStore.drafts.first?.posts == ["Saved before"] }
+        _ = quitting.persistDrafts()
+        _ = try await quitPage.evaluateJavaScript("const e=document.querySelector('#editor');e.focus();const r=document.createRange();r.selectNodeContents(e);r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);void 0")
+        quitting.view.window?.makeFirstResponder(quitPage)
+        let nativeInput = quitting.view.window?.firstResponder as? NSTextInputClient
+        nativeInput?.insertText(" latest input", replacementRange: NSRange(location: NSNotFound, length: 0))
+        var quitResult: Bool?
+        quitting.prepareToLeave { quitResult = $0 }
+        expect("quit waits for native text input to reach WebKit", nativeInput != nil && quitResult == nil)
+        let concurrentQuit = await prepareToLeave(quitting)
+        expect("a second leave request cannot bypass a pending editor capture", !concurrentQuit)
+        try await waitFor { quitResult != nil }
+        expect("quit persists the last native input before allowing termination", quitResult == true
+            && DraftStore(url: quitURL).drafts.first?.posts == ["Saved before latest input"])
+        _ = try await quitPage.evaluateJavaScript("window.fixtureReadDraft=window.__minimalBirdReadDraft;window.__minimalBirdReadDraft=async()=>null;void 0")
+        let unreadableQuit = await prepareToLeave(quitting)
+        expect("quit is cancelled when the editor cannot be read", !unreadableQuit && !quitPage.isHidden)
+        quitPanel.status = ""
+        quitting.signOut()
+        try await waitFor { quitPanel.status.contains("Could not read the editor") }
+        let retainedAfterSignOut = (try await quitPage.evaluateJavaScript("document.querySelector('#editor').textContent==='Saved before latest input'")) as? Bool == true
+        expect("sign-out retains the session when editor capture fails", !quitPage.isHidden && retainedAfterSignOut)
+        _ = try await quitPage.evaluateJavaScript("window.fixturePendingRead=new Promise(()=>{});window.__minimalBirdReadDraft=()=>window.fixturePendingRead;void 0")
+        let timedOutQuit = await prepareToLeave(quitting)
+        expect("an unresponsive editor cancels quit instead of leaving it pending", !timedOutQuit
+            && quitPanel.status.contains("did not respond"))
+        _ = try await quitPage.evaluateJavaScript("window.__minimalBirdReadDraft=window.fixtureReadDraft;void 0")
+        let retryQuit = await prepareToLeave(quitting)
+        expect("quit can be retried after the editor responds again", retryQuit)
+
+        let queuedURL = folder.appendingPathComponent("queued-input.json")
+        let queuedStore = DraftStore(url: queuedURL)
+        let (_, queuedPage, queuedPanel) = try await composer(queuedStore)
+        _ = try await queuedPage.evaluateJavaScript("""
+            document.querySelector('#editor').textContent='Before queued input';
+            setTimeout(()=>{
+              document.querySelector('#editor').textContent='Including the last queued input';
+              document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}));
+            },60);void 0
+            """)
+        button("Save draft", in: queuedPanel)?.performClick(nil)
+        try await waitFor { queuedPanel.isExpanded }
+        expect("Save draft includes input still queued when its button is clicked", DraftStore(url: queuedURL).drafts.first?.posts == ["Including the last queued input"])
     }
 
     private func exerciseAuthoring() async throws {
@@ -518,6 +844,9 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     /// Renders the real window around synthetic X pages for visual review.
     /// Set MINIMAL_BIRD_SNAPSHOTS to a folder; nothing contacts X.
     private func snapshots(to folder: URL) async {
+        let previousExpansion = UserDefaults.standard.object(forKey: "DraftsExpanded")
+        UserDefaults.standard.set(false, forKey: "DraftsExpanded")
+        defer { UserDefaults.standard.set(previousExpansion, forKey: "DraftsExpanded") }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let avatar = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' fill='%237d8a86'/></svg>"
         let blue = "rgb(29,155,240)", grey = "rgb(83,100,113)", rule = "rgb(207,217,222)"
@@ -581,7 +910,13 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         await write(controller, "composer.png", to: folder)
         controller.toggleDrafts()
         try? await Task.sleep(for: .milliseconds(600))
+        expect("long draft titles keep the library window compact", abs(window.contentView!.bounds.width - 580) < 1)
         await write(controller, "composer-drafts.png", to: folder)
+        window.setContentSize(NSSize(width: 440, height: 660))
+        try? await Task.sleep(for: .milliseconds(100))
+        expect("the draft library fits the minimum window width", abs(window.contentView!.bounds.width - 440) < 1)
+        await write(controller, "library-narrow.png", to: folder)
+        window.setContentSize(NSSize(width: 580, height: 660))
         controller.start(demo: true)
         try? await Task.sleep(for: .milliseconds(300))
         await write(controller, "welcome.png", to: folder)
