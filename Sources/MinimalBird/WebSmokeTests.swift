@@ -83,6 +83,12 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         print("\(passed ? "PASS" : "FAIL"): \(title)")
     }
 
+    /// Only synthetic fixtures reach this helper. Include the DOM on failure
+    /// so differences between supported WebKit versions can be diagnosed.
+    private func editorDetails(_ page: WKWebView) async -> String {
+        (try? await page.evaluateJavaScript("JSON.stringify([...document.querySelectorAll('[contenteditable=true]')].map(e=>({text:e.innerText,html:e.innerHTML})))")) as? String ?? "unavailable"
+    }
+
     private func exercise() async throws {
         let fixture = """
         <header role="banner"><button id="notifications">Notifications 99</button><a id="newPost" data-testid="SideNav_NewTweet_Button" href="/compose/post">New post</a></header>
@@ -370,7 +376,10 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await Task.sleep(for: .milliseconds(50))
         let outcome = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
                                                         arguments: ["posts": ["Hello\nthere", "And a reply"]], in: nil, contentWorld: .page) as? String
-        if outcome != "ok" { failures += 1; print("FAIL: a saved thread is put back into X's editors (\(outcome ?? "nil"))") }
+        if outcome != "ok" {
+            failures += 1
+            print("FAIL: a saved thread is put back into X's editors (\(outcome ?? "nil")); \(await editorDetails(web))")
+        }
         else { print("PASS: a saved thread is put back into X's editors") }
         try await check("restored text replaces the old text", "(()=>{const e=[...document.querySelectorAll('[data-testid^=tweetTextarea_]')];return e.length===2 && e[0].innerText.replace(/\\s+/g,' ').trim()==='Hello there' && e[1].innerText.trim()==='And a reply'})()")
         try await Task.sleep(for: .milliseconds(50))
@@ -394,6 +403,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await js("document.querySelector('#editor').textContent='Hello world';void 0")
         let exact = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
                                                       arguments: ["posts": ["Hello\nworld"]], in: nil, contentWorld: .page) as? String
+        if exact != "ok" { print("Line-break fixture: \(await editorDetails(web))") }
         try await check("restoring a draft replaces spaces with its saved line breaks", "\(exact == "ok") && document.querySelector('#editor').innerText==='Hello\\nworld'")
         let spaced = try await web.callAsyncJavaScript("return await window.__minimalBirdInsertPosts(posts)",
                                                        arguments: ["posts": ["  Hello  world  "]], in: nil, contentWorld: .page) as? String
@@ -505,7 +515,12 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         let (fullController, fullPage, fullPanel) = try await composer(fullStore, threaded: true)
         fullController.view.window?.orderOut(nil)
         fullPanel.onOpen?(fullID)
-        try await waitFor { fullStore.draft(fullID)?.posts == ["Line one\nLine two", "Second post", ""] }
+        do {
+            try await waitFor { fullStore.draft(fullID)?.posts == ["Line one\nLine two", "Second post", ""] }
+        } catch {
+            print("Native thread fixture: \(fullPanel.status); \(await editorDetails(fullPage))")
+            throw error
+        }
         expect("native activation restores every thread post with line breaks", (try await fullPage.evaluateJavaScript("JSON.stringify([...document.querySelectorAll('[contenteditable=true]')].map(e=>e.innerText))===JSON.stringify(['Line one\\nLine two','Second post',''])")) as? Bool == true)
         expect("thread restoration activates Add post through its native key handler", (try await fullPage.evaluateJavaScript("window.nativeAddKeys===2")) as? Bool == true)
         expect("thread restoration never activates Post", (try await fullPage.evaluateJavaScript("!window.nativeSubmissions")) as? Bool == true)
