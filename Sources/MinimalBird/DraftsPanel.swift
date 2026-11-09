@@ -15,8 +15,10 @@ final class DraftsPanel: NSView {
     var onNew: (() -> Void)?
     var onLibrary: (() -> Void)?
     var onResume: (() -> Void)?
+    var onPosts: (() -> Void)?
     private(set) var isExpanded: Bool
     private let libraryButton = NSButton(title: "Draft library", target: nil, action: nil)
+    private let postsButton = NSButton(title: "My posts", target: nil, action: nil)
     private let newButton = NSButton(title: "New draft", target: nil, action: nil)
     private let saveButton = NSButton(title: "Save draft", target: nil, action: nil)
     private let resumeButton = NSButton(title: "Back to editor", target: nil, action: nil)
@@ -36,6 +38,8 @@ final class DraftsPanel: NSView {
     private var persistentStatus = ""
     private var busy = false
     private var canSave = false
+    private var canShowPosts = false
+    private var showingPosts = false
 
     init(expanded: Bool) {
         isExpanded = expanded
@@ -45,10 +49,10 @@ final class DraftsPanel: NSView {
         let rule = NSView()
         rule.wantsLayer = true
         rule.layer?.backgroundColor = Palette.line.cgColor
-        let actions = NSStackView(views: [libraryButton, resumeButton, NSView(), newButton, saveButton])
+        let actions = NSStackView(views: [libraryButton, postsButton, resumeButton, NSView(), newButton, saveButton])
         actions.orientation = .horizontal
         actions.spacing = 8
-        for button in [libraryButton, newButton, saveButton, resumeButton] {
+        for button in [libraryButton, postsButton, newButton, saveButton, resumeButton] {
             button.bezelStyle = .push
             button.controlSize = .large
             button.font = .systemFont(ofSize: 12, weight: .medium)
@@ -56,6 +60,7 @@ final class DraftsPanel: NSView {
             button.setContentHuggingPriority(.required, for: .horizontal)
         }
         libraryButton.action = #selector(openLibrary)
+        postsButton.action = #selector(openPosts)
         newButton.action = #selector(newDraft)
         saveButton.action = #selector(saveDraft)
         resumeButton.action = #selector(resumeDraft)
@@ -63,6 +68,7 @@ final class DraftsPanel: NSView {
         saveButton.toolTip = "Save the current text and return to Draft library (⌘S)"
         newButton.toolTip = "Save the current text and start a new draft (⌘N)"
         libraryButton.toolTip = "Save the current text and open Draft library (⌘D)"
+        postsButton.toolTip = "Save the current text and show your posts (⌘P)"
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = Palette.muted
         statusLabel.lineBreakMode = .byTruncatingTail
@@ -166,7 +172,17 @@ final class DraftsPanel: NSView {
         self.busy = busy
         saveButton.isEnabled = canSave && !busy
         for button in [newButton, libraryButton, resumeButton] { button.isEnabled = !busy }
+        postsButton.isEnabled = canShowPosts && !busy
         search.isEnabled = !busy
+    }
+    func updatePostsAction(canShow: Bool, showing: Bool) {
+        canShowPosts = canShow
+        guard showing != showingPosts else {
+            postsButton.isEnabled = canShowPosts && !busy
+            return
+        }
+        showingPosts = showing
+        applyMode()
     }
     func setExpanded(_ expanded: Bool) {
         guard expanded != isExpanded else { return }
@@ -179,8 +195,9 @@ final class DraftsPanel: NSView {
         compactHeight.isActive = !isExpanded
         libraryBottom.isActive = isExpanded
         libraryButton.isHidden = isExpanded
-        saveButton.isHidden = isExpanded
-        resumeButton.isHidden = !isExpanded
+        postsButton.isHidden = showingPosts && !isExpanded
+        saveButton.isHidden = isExpanded || showingPosts
+        resumeButton.isHidden = !isExpanded && !showingPosts
         for child in [heading, detail, search, scroll, empty] { child.isHidden = !isExpanded }
         updateActions(canSave: canSave, busy: busy)
     }
@@ -203,13 +220,14 @@ final class DraftsPanel: NSView {
         }
     }
     @objc private func openLibrary() { onLibrary?() }
+    @objc private func openPosts() { onPosts?() }
     @objc private func newDraft() { onNew?() }
     @objc private func saveDraft() { onSave?() }
     @objc private func resumeDraft() { onResume?() }
     @objc private func searchChanged() { rebuildRows() }
 }
 
-private final class FlippedView: NSView {
+final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
@@ -236,7 +254,8 @@ private final class DraftRow: NSView {
         preview.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let posts = draft.posts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
         let when = DateFormatter.localizedString(from: draft.updated, dateStyle: .short, timeStyle: .short)
-        let detail = NSTextField(labelWithString: "\(posts) \(posts == 1 ? "post" : "posts") · Saved \(when)")
+        let kind = draft.target.map { $0.kind == .quote ? "Quote · " : "Update · " } ?? ""
+        let detail = NSTextField(labelWithString: "\(kind)\(posts) \(posts == 1 ? "post" : "posts") · Saved \(when)")
         detail.font = .systemFont(ofSize: 10)
         detail.textColor = Palette.muted
         detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

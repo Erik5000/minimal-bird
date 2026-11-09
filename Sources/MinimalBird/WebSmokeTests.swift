@@ -21,12 +21,14 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.add(self, name: "focus")
         configuration.userContentController.addUserScript(WKUserScript(
+            source: "window.__minimalBirdOwnHandle = '@Writer';", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        configuration.userContentController.addUserScript(WKUserScript(
             source: Resource.read("focus", extension: "js")!, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         web = WKWebView(frame: NSRect(x: 0, y: 0, width: 760, height: 600), configuration: configuration)
         web.navigationDelegate = self
         web.uiDelegate = self
         Task {
-            try? await Task.sleep(for: .seconds(40))
+            try? await Task.sleep(for: .seconds(70))
             print("FAIL: WebKit tests timed out. Run in an unrestricted desktop session.")
             exit(1)
         }
@@ -177,6 +179,211 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await exerciseAuthoring()
         try await checkAccountStores()
         try await exerciseNativeDraftRecovery()
+        try await exerciseOwnPosts()
+        try await exerciseNativePosts()
+    }
+
+    // These fixtures copy the structure of X's replies page, post page and
+    // composer as they were read from the live site. They hold no real posts.
+    private static let pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+    private static let postActions = "<div role='group'><button data-testid='reply'>1</button><button data-testid='retweet'>2</button><button data-testid='like'>3</button></div>"
+
+    private static func postCell(_ author: String, _ id: String, _ time: String, _ content: String) -> String {
+        "<div data-testid='cellInnerDiv'><article data-testid='tweet' id='p\(id)'><a href='/\(author)'>\(author)</a><a href='/\(author)/status/\(id)'><time datetime='\(time)'>4h</time></a>\(content)\(postActions)</article></div>"
+    }
+
+    private static let quoteMenuScript = """
+        <script>
+        window.fixtureReposts=0;
+        document.querySelectorAll('[data-testid=retweet]').forEach(control=>control.addEventListener('click',()=>{
+          document.querySelector('#layers').innerHTML=`<div role='menu'><div role='menuitem' data-testid='retweetConfirm' id='repost'>Repost</div><a role='menuitem' href='/compose/post' id='quote'>Quote</a></div>`;
+          document.querySelector('#repost').onclick=()=>window.fixtureReposts++;
+          document.querySelector('#quote').onclick=event=>{
+            event.preventDefault();history.pushState({},'','/compose/post');document.querySelector('#layers').innerHTML='';
+            document.querySelector('#page').innerHTML=`<div id='composer'><button data-testid='tweetButton'>Post</button><a data-testid='UserAvatar-Container-Writer' href='/Writer'><img alt='' src='\(pixel)'></a><div data-testid='tweetTextarea_0' id='editor' contenteditable='true'></div><div data-testid='attachments' id='box'><div id='card'><button><div data-testid='User-Name'>Writer</div><div data-testid='tweetText'>Hello</div><img id='cardImage' src='\(pixel)'></button></div></div></div>`;
+          };
+        }));
+        </script>
+        """
+
+    private static let timelineBody = "<main id='page'>"
+        + postCell("Writer", "111", "2026-11-06T08:46:27.000Z", "<div data-testid='tweetText'><span>Hello </span><img alt='🙂' src='\(pixel)'><span> world</span></div><div role='link' tabindex='0'><time datetime='2026-11-05T08:00:00.000Z'>1d</time><div data-testid='tweetText'>Quoted text</div></div>")
+        + postCell("Someone", "222", "2026-11-06T08:30:00.000Z", "<div data-testid='tweetText'>Parent by someone else</div>")
+        + postCell("writer", "444", "2026-11-06T08:20:00.000Z", "<div data-testid='tweetText'>My reply</div>")
+        + postCell("Writer", "555", "2026-11-06T08:10:00.000Z", "<div data-testid='tweetPhoto'></div>")
+        + "<div data-testid='cellInnerDiv'><div id='follow'>Who to follow</div></div></main><div id='layers'></div>"
+        + quoteMenuScript
+
+    /// A post page where X's Repost control opens its menu, and Quote opens the composer.
+    private static let statusBody = "<main id='page'>"
+        + postCell("Writer", "111", "2026-11-06T08:46:27.000Z", "<div data-testid='tweetText'>Hello</div>")
+        + "</main><div id='layers'></div>" + quoteMenuScript
+
+    /// A wide window: X keeps the post page, with an inline reply box first in
+    /// the document, and mounts the quote composer as a dialog a moment later.
+    private static let inlineReplyBox = "<div data-testid='primaryColumn'><div data-testid='tweetTextarea_0' id='inlineEditor' contenteditable='true'></div><button data-testid='tweetButtonInline' id='inlineReply'>Reply</button></div>"
+
+    private static let wideStatusBody = "<main id='page'>"
+        + postCell("Writer", "111", "2026-11-06T08:46:27.000Z", "<div data-testid='tweetText'>Hello</div>")
+        + inlineReplyBox
+        + """
+        </main><div id='layers'></div><script>
+        document.querySelector('[data-testid=retweet]').addEventListener('click',()=>{
+          document.querySelector('#layers').innerHTML=`<div role='menu'><a role='menuitem' href='/compose/post' id='quote'>Quote</a></div>`;
+          document.querySelector('#quote').onclick=event=>{event.preventDefault();history.pushState({},'','/compose/post');document.querySelector('#layers').innerHTML='';};
+        });
+        window.fixtureMountDialog=()=>{document.querySelector('#layers').innerHTML=`<div role='dialog' id='modal'><button data-testid='tweetButton'>Post</button><a data-testid='UserAvatar-Container-Writer' href='/Writer'><img alt='' src='\(pixel)'></a><div data-testid='tweetTextarea_0' id='modalEditor' contenteditable='true'></div><div data-testid='attachments'><div id='wideCard'><button><div data-testid='User-Name'>Writer</div></button></div></div></div>`;};
+        </script>
+        """
+
+    private static let replyBody = "<main><div id='composer'><button data-testid='tweetButton' disabled>Reply</button>"
+        + "<article data-testid='tweet' id='context' tabindex='0'><a id='contextLink' href='/Writer/status/111'><time datetime='2026-11-06T08:46:27.000Z'>4h</time></a><div data-testid='tweetText'>Old post</div><div data-testid='tweetPhoto'><img src='\(pixel)'></div></article>"
+        + "<a data-testid='UserAvatar-Container-Writer' href='/Writer'><img alt='' src='\(pixel)'></a><div data-testid='tweetTextarea_0' id='editor' contenteditable='true'></div></div></main>"
+        + "<aside data-testid='sidebarColumn' id='side'>Trends</aside>"
+
+    private func exerciseOwnPosts() async throws {
+        func lastPosts() -> [[String: Any]] {
+            messages.last { $0["state"] as? String == "posts" }?["posts"] as? [[String: Any]] ?? []
+        }
+        await load(Self.timelineBody, path: "/Writer/with_replies")
+        let posts = lastPosts()
+        expect("own posts and replies are reported, and other authors are not", posts.compactMap { $0["id"] as? String } == ["111", "444", "555"])
+        expect("post text keeps emoji and leaves out the quoted post", posts.first?["text"] as? String == "Hello 🙂 world")
+        expect("a post without text reports its media", posts.last?["media"] as? Bool == true)
+        expect("post reports carry no counts", posts.allSatisfy { Set($0.keys) == ["id", "text", "time", "media"] })
+        try await check("the profile page stays behind the curtain", "!document.querySelector('[data-mb-surface]') && ['p111','p222'].every(id => getComputedStyle(document.getElementById(id)).visibility==='hidden')")
+        try await check("older posts can be requested", "window.__minimalBirdShowOlderPosts() === true")
+        for path in ["/Writer2/with_replies", "/Someone/with_replies"] {
+            await load(Self.timelineBody, path: path)
+            expect("another profile is not read: \(path)", lastPosts().isEmpty && messages.contains { $0["state"] as? String == "blocked" })
+        }
+
+        await load(Self.statusBody, path: "/Writer/status/111")
+        expect("a post page waits for the native action", messages.contains { $0["state"] as? String == "postTarget" })
+        let missing = try await web.callAsyncJavaScript("return await window.__minimalBirdOpenQuote('999', 200)", arguments: [:], in: nil, contentWorld: .page) as? String
+        expect("Quote fails closed when the post is not on the page", missing == "failed")
+        let quoted = try await web.callAsyncJavaScript("return await window.__minimalBirdOpenQuote('111')", arguments: [:], in: nil, contentWorld: .page) as? String
+        expect("Quote uses X's own menu", quoted == "ok")
+        try await Task.sleep(for: .milliseconds(100))
+        try await check("Quote never presses Repost", "window.fixtureReposts===0")
+        try await check("the quote composer is visible", "getComputedStyle(document.querySelector('#editor')).visibility==='visible'")
+        try await check("the quoted post is shown and cannot be clicked", "(()=>{const s=getComputedStyle(document.querySelector('#card'));return s.visibility==='visible' && s.pointerEvents==='none'})()")
+        try await check("a quoted post is not reported as an attachment", "(()=>{const d=window.__minimalBirdDraftSnapshot();return d.extras===false && d.dirty===false})()")
+        try await js("document.querySelector('#box').insertAdjacentHTML('beforeend',`<div id='photo'><img src='\(Self.pixel)'></div>`);void 0")
+        try await Task.sleep(for: .milliseconds(60))
+        try await check("real media beside a quoted post still counts as an attachment", "window.__minimalBirdDraftSnapshot().extras===true")
+        try await js("document.querySelector('#photo').remove();document.querySelector('[data-testid=tweetButton]').click();history.pushState({},'','/Writer/status/111');void 0")
+        try await Task.sleep(for: .milliseconds(60))
+        expect("posting a quote reaches the finish screen", messages.contains { $0["state"] as? String == "finished" })
+
+        await load(Self.wideStatusBody, path: "/Writer/status/111")
+        let wide = try await web.callAsyncJavaScript("return await window.__minimalBirdOpenQuote('111')", arguments: [:], in: nil, contentWorld: .page) as? String
+        expect("Quote works on a wide post page", wide == "ok")
+        try await Task.sleep(for: .milliseconds(60))
+        try await check("the reply box under a post is never taken for the composer", "!document.querySelector('[data-mb-surface]') && getComputedStyle(document.querySelector('#inlineEditor')).visibility==='hidden'")
+        try await js("window.fixtureMountDialog();void 0")
+        try await Task.sleep(for: .milliseconds(60))
+        try await check("a wide quote opens X's dialog with the quoted post", "document.querySelector('[data-mb-surface]').id==='modal' && getComputedStyle(document.querySelector('#modalEditor')).visibility==='visible' && getComputedStyle(document.querySelector('#wideCard')).visibility==='visible'")
+        try await check("the reply box stays hidden behind a wide quote", "getComputedStyle(document.querySelector('#inlineEditor')).visibility==='hidden' && getComputedStyle(document.querySelector('#inlineReply')).visibility==='hidden'")
+        try await check("a wide quote marks exactly its quoted post", "document.querySelectorAll('[data-mb-surface] [data-mb-context]').length===1")
+
+        let lateDialog = "<div role='dialog' id='modal'><button data-testid='tweetButton'>Reply</button><article data-testid='tweet' id='lateContext'><div data-testid='tweetText'>Old post</div></article><div data-testid='tweetTextarea_0' id='modalEditor' contenteditable='true'></div></div>"
+        await load("<main>\(Self.inlineReplyBox)</main><div id='layers'></div>", path: "/compose/post?in_reply_to=111")
+        try await check("an update waits for the old post before it shows an editor", "!document.querySelector('[data-mb-surface]')")
+        try await js("document.querySelector('#layers').innerHTML=`\(lateDialog)`;void 0")
+        try await Task.sleep(for: .milliseconds(60))
+        try await check("a wide update opens X's dialog with the old post", "document.querySelector('[data-mb-surface]').id==='modal' && document.querySelectorAll('[data-mb-surface] [data-mb-context]').length===1")
+
+        await load("<main>\(Self.inlineReplyBox)</main><div id='layers'></div>", path: "/compose/post")
+        try await check("a plain composer can use an inline box", "!!document.querySelector('[data-mb-surface] #inlineEditor')")
+        try await js("document.querySelector('#layers').innerHTML=`<div role='dialog' id='modal'><button data-testid='tweetButton'>Post</button><div data-testid='tweetTextarea_0' id='modalEditor' contenteditable='true'></div></div>`;void 0")
+        try await Task.sleep(for: .milliseconds(60))
+        try await check("a dialog composer replaces an inline box that is already showing", "document.querySelector('[data-mb-surface]').id==='modal' && getComputedStyle(document.querySelector('#inlineEditor')).visibility==='hidden'")
+
+        await load(Self.replyBody, path: "/compose/post?in_reply_to=111")
+        try await check("the update composer is visible", "getComputedStyle(document.querySelector('#editor')).visibility==='visible'")
+        try await check("the post being updated is shown and inert", "(()=>{const c=document.querySelector('#context'),s=getComputedStyle(c);return s.visibility==='visible' && s.pointerEvents==='none' && c.inert})()")
+        try await check("links inside the post being updated keep their text", "getComputedStyle(document.querySelector('#contextLink')).display!=='none'")
+        try await check("the page beside the update composer stays hidden", "getComputedStyle(document.querySelector('#side')).visibility==='hidden'")
+        try await check("the post being updated is not reported as an attachment", "window.__minimalBirdDraftSnapshot().extras===false")
+        await load(Self.replyBody, path: "/compose/post")
+        try await check("a post inside a plain composer still fails closed", "!document.querySelector('[data-mb-surface]')")
+    }
+
+    private func exerciseNativePosts() async throws {
+        func waitFor(_ condition: () async throws -> Bool) async throws {
+            for _ in 0..<150 {
+                if try await condition() { return }
+                try await Task.sleep(for: .milliseconds(40))
+            }
+            throw NSError(domain: "My posts fixture timed out", code: 1)
+        }
+        func buttons(_ title: String, in view: NSView) -> [NSButton] {
+            var found = (view as? NSButton).flatMap { $0.title == title ? [$0] : nil } ?? []
+            for child in view.subviews { found += buttons(title, in: child) }
+            return found
+        }
+        func page(_ body: String) -> String { "<!doctype html><html><head><meta charset='utf-8'></head><body>\(body)</body></html>" }
+        let store = DraftStore(url: nil)
+        let controller = ComposerController(dataStore: .nonPersistent(), drafts: store)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 660),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.contentViewController = controller
+        window.setContentSize(NSSize(width: 580, height: 660))
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        let view = controller.view.subviews.compactMap { $0 as? WKWebView }.first!
+        let panel = controller.view.subviews.compactMap { $0 as? PostsPanel }.first!
+        func location() async -> String { (try? await view.evaluateJavaScript("location.pathname+location.search")) as? String ?? "" }
+        func hasEditor() async -> Bool { (try? await view.evaluateJavaScript("!!document.querySelector('[data-mb-surface] #editor')")) as? Bool == true }
+
+        controller.showFixture(page("<div role='dialog'><a data-testid='UserAvatar-Container-Writer' href='/Writer'><img alt=''></a><div id='editor' data-testid='tweetTextarea_0' contenteditable='true'></div><button data-testid='tweetButton'>Post</button></div>"))
+        try await waitFor { controller.canShowPosts }
+
+        controller.setFixture(page(Self.timelineBody))
+        controller.showPosts()
+        try await waitFor { panel.rowCount == 3 && !panel.isHidden }
+        expect("the web view stays awake behind the native list", !view.isHidden)
+        window.setContentSize(NSSize(width: 1100, height: 660))
+        controller.view.layoutSubtreeIfNeeded()
+        expect("X stays in its one-column layout in a wide window", abs(view.frame.width - 640) < 1 && abs(view.frame.midX - controller.view.bounds.midX) < 1)
+        expect("the native list fills a wide window", abs(panel.frame.width - controller.view.bounds.width) < 1)
+        window.setContentSize(NSSize(width: 580, height: 660))
+        controller.view.layoutSubtreeIfNeeded()
+        expect("X fills a narrow window", abs(view.frame.width - 580) < 1)
+        if let folder = ProcessInfo.processInfo.environment["MINIMAL_BIRD_SNAPSHOTS"] {
+            await write(controller, "my-posts.png", to: URL(fileURLWithPath: folder, isDirectory: true))
+        }
+
+        controller.setFixture(page(Self.replyBody))
+        buttons("Update", in: panel).first?.performClick(nil)
+        try await waitFor { await hasEditor() }
+        expect("Update opens X's reply composer for the newest post", await location() == "/compose/post?in_reply_to=111")
+        expect("the list leaves when the composer opens", panel.isHidden)
+        _ = try? await view.evaluateJavaScript("document.querySelector('#editor').textContent='Follow-up';window.__minimalBirdReportDraft();void 0")
+        try await waitFor { store.drafts.first?.posts == ["Follow-up"] }
+        expect("a draft remembers the post it updates", store.drafts.first?.target == PostTarget(kind: .reply, id: "111"))
+
+        controller.setFixture(page(Self.timelineBody))
+        controller.showPosts()
+        try await waitFor { panel.rowCount == 3 && !panel.isHidden }
+        _ = try? await view.evaluateJavaScript("window.fixtureSamePage=true;void 0")
+        buttons("Quote", in: panel).first?.performClick(nil)
+        try await waitFor { await hasEditor() }
+        let reposts = (try? await view.evaluateJavaScript("window.fixtureReposts")) as? Int
+        expect("Quote opens the composer without a repost", reposts == 0)
+        expect("Quote ends on X's composer route", await location() == "/compose/post")
+        expect("Quote from the list needs no new page", (try? await view.evaluateJavaScript("window.fixtureSamePage===true")) as? Bool == true)
+        expect("the list leaves when the quote composer opens", panel.isHidden)
+
+        controller.showPosts()
+        try await waitFor { panel.rowCount == 3 && !panel.isHidden }
+        _ = try? await view.evaluateJavaScript("document.querySelector('#p111').remove();void 0")
+        controller.setFixture(page(Self.statusBody))
+        buttons("Quote", in: panel).first?.performClick(nil)
+        try await waitFor { await hasEditor() }
+        expect("Quote opens the post's page when X dropped it from the list", (try? await view.evaluateJavaScript("window.fixtureSamePage===undefined")) as? Bool == true)
     }
 
     private func exerciseFocusAndPopovers() async throws {
@@ -929,6 +1136,12 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         controller.showFixture(page)
         try? await Task.sleep(for: .seconds(2))
         await write(controller, "composer.png", to: folder)
+        window.setContentSize(NSSize(width: 440, height: 660))
+        try? await Task.sleep(for: .milliseconds(150))
+        expect("the composer buttons fit the minimum window width", abs(window.contentView!.bounds.width - 440) < 1)
+        await write(controller, "composer-narrow.png", to: folder)
+        window.setContentSize(NSSize(width: 580, height: 660))
+        try? await Task.sleep(for: .milliseconds(100))
         controller.toggleDrafts()
         try? await Task.sleep(for: .milliseconds(600))
         expect("long draft titles keep the library window compact", abs(window.contentView!.bounds.width - 580) < 1)

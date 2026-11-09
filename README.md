@@ -2,7 +2,7 @@
 
 <img src="Assets/AppIcon.png" width="96" alt="Minimal Bird icon">
 
-A small Mac app for writing and posting to X. Your avatar, a composer, and a Post button. Feeds, notifications, engagement, trends, and profile browsing stay hidden.
+A small Mac app for writing and posting to X. Your avatar, a composer, and a Post button. You can also list your own posts to update or quote them. Feeds, notifications, engagement, trends, and browsing of other profiles stay hidden.
 
 Uses X's own website in Apple's WebKit. No paid API, API key, backend, analytics, or third-party dependencies. Independent software, not affiliated with X.
 
@@ -28,6 +28,7 @@ Write and attach images/video using the composer, then click **Post** yourself. 
 - **Save draft / ⌘S:** Save the current text and return to Draft library.
 - **New draft / ⌘N:** Save the current text and open a blank composer.
 - **Draft library / ⌘D:** Save the current text and open your saved drafts.
+- **My posts / ⌘P:** Save the current text and list your own posts.
 - **⌘R:** Reload X; your text is put back afterwards.
 - **⌘W / close button:** Hide the window while keeping the session and draft ready.
 - **Dock icon / Window → Show Composer:** Reopen the window.
@@ -54,9 +55,20 @@ On quit, the app reads the latest editor text and waits for a successful disk sa
 
 Window position and size are remembered.
 
+## My posts
+
+**My posts** lists your own posts and replies, newest first. Each row shows the text and the date. Other people's posts, reposts, and all counts stay hidden. X's page stays behind the list and is never shown.
+
+- **Update** adds a new post under the old post. X does not let you change an old post, so the app opens X's reply composer for it.
+- **Quote** opens X's quote composer with the old post attached.
+- **Show older posts** asks X for more of your posts. X decides how many it sends.
+- **Back to editor** returns to the draft you left.
+
+You write the text and click **Post** yourself. The app never presses Repost. A draft keeps the post it updates or quotes, and it reopens the same way. Draft library marks these drafts with **Update** or **Quote**.
+
 ## Design
 
-The composer keeps X's own layout (single posts, threads, polls, link cards, and media all work as X intends) and draws it in one calm skin: a warm paper background, one system typeface, quiet ink and grey text, hairline borders, muted toolbar icons, and a single terracotta accent for **Post**, links, and the character ring. The skin measures X's computed colors and maps them onto this palette, so it does not depend on X's class names or a fixed layout and does not switch looks while you write. The live editor, upload input, and submission button keep their original DOM parents and X event handlers.
+The composer keeps X's own layout (single posts, threads, polls, link cards, and media all work as X intends) and draws it in one calm skin: a warm paper background, one system typeface, quiet ink and grey text, hairline borders, muted toolbar icons, and a single terracotta accent for **Post**, links, and the character ring. The skin measures X's computed colors and maps them onto this palette, so it does not depend on X's class names or a fixed layout and does not switch looks while you write. The live editor, upload input, and submission button keep their original DOM parents and X event handlers. In a window wider than 640 points, X's page stays in one centered column. This keeps X in its full-page composer layout.
 
 The writing area receives keyboard focus when it opens and when you return from native menus or dialogs, with the caret where you left it. Focus restoration never takes focus from a control you are using inside the composer, such as a newly added thread post or a poll choice. Clicking blank space around a single post returns to its editor. Typing never plays the macOS alert sound: X's editor handles text itself, and keystrokes WebKit reports as unhandled end quietly in the app.
 
@@ -74,7 +86,7 @@ While the app stays running, closing/reopening the window keeps the WebKit proce
 
 A document-start curtain hides the page until a recognized sign-in form or composer is present. Native navigation and client-side routes are restricted. Background elements are invisible and inert. Unknown layouts stay covered and show a retry screen. The core composer exposes media upload, polls, emoji, and reply controls where X supports them; browsing-oriented and scheduling controls are hidden. Reply settings and emoji pickers opened from the composer are recognized as separate authoring popups. Their search/selection controls remain available without revealing the surrounding page. Unknown advanced dialogs may still remain hidden.
 
-This is visual and navigation isolation. X still makes its usual website requests and may download timeline data behind the curtain. The native app does not directly call private X APIs, inspect login-field values, store credentials itself, or add telemetry.
+This is visual and navigation isolation. X still makes its usual website requests and may download timeline data behind the curtain. The native app does not directly call private X APIs, inspect login-field values, store credentials itself, or add telemetry. When you open My posts, the script reads only the ID, text, time, and a media flag of your own posts from X's page. The app keeps them in memory while the app runs and does not write them to disk. A draft for an update or a quote stores only that post's ID with its text.
 
 ## Development
 
@@ -84,7 +96,7 @@ swift test --disable-sandbox
 "build/Minimal Bird.app/Contents/MacOS/MinimalBird" --self-test
 ```
 
-Unit tests check allowed and blocked URLs, including deceptive hosts, account metadata persistence, and the draft store (ordering, clearing, private file permissions, damaged files, the size limit). WebKit tests use synthetic pages and a nonpersistent store, plus disposable persistent stores for cookie-isolation checks. They check composer/login visibility, background isolation, the color/typeface skin, text/poll draft detection, thread focus and per-post draft reports, restoring a thread draft into the editors without duplicate paste, blocked navigation, dynamic page changes, completion, and warm reopening without a new document. A disposable PNG exercises the actual native file-input callback and FileReader access, external-input isolation, preview/removal controls, picker cancellation, and removal of a poll without losing text. They never publish or contact X. Run them in a normal macOS desktop session so WebKit can start its rendering process.
+Unit tests check allowed and blocked URLs, including deceptive hosts, account metadata persistence, and the draft store (ordering, clearing, private file permissions, damaged files, the size limit). WebKit tests use synthetic pages and a nonpersistent store, plus disposable persistent stores for cookie-isolation checks. They check composer/login visibility, background isolation, the color/typeface skin, text/poll draft detection, thread focus and per-post draft reports, restoring a thread draft into the editors without duplicate paste, the My posts list, the Update and Quote composers, blocked navigation, dynamic page changes, completion, and warm reopening without a new document. A disposable PNG exercises the actual native file-input callback and FileReader access, external-input isolation, preview/removal controls, picker cancellation, and removal of a poll without losing text. They never publish or contact X. Run them in a normal macOS desktop session so WebKit can start its rendering process.
 
 Set `MINIMAL_BIRD_SNAPSHOTS` to a folder when running `--self-test` to also render the real window around synthetic X pages (composer, drafts list, welcome screen) as PNG files; CI uploads them as the `window-snapshots` artifact for visual review.
 

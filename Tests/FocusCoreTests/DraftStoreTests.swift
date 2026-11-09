@@ -99,4 +99,26 @@ final class DraftStoreTests: XCTestCase {
         XCTAssertEqual(store.drafts.first?.posts, ["Draft \(DraftStore.limit)"])
         XCTAssertFalse(store.drafts.contains { $0.posts == ["Draft 0"] })
     }
+
+    func testADraftKeepsThePostItUpdatesOrQuotes() throws {
+        let url = temporaryURL()
+        let store = DraftStore(url: url)
+        let target = PostTarget(kind: .quote, id: "123")
+        let id = try XCTUnwrap(store.save(["About that post"], id: nil, target: target))
+        XCTAssertEqual(store.draft(id)?.target, target)
+        store.save(["About that post, revised"], id: id, target: target)
+        XCTAssertEqual(store.draft(id)?.target, target)
+        guard case .success = store.persist() else { return XCTFail("Could not write drafts") }
+        XCTAssertEqual(DraftStore(url: url).draft(id)?.target, target)
+    }
+
+    func testDraftsSavedBeforeTargetsExistStillLoad() throws {
+        let url = temporaryURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let id = UUID()
+        try Data(#"[{"id":"\#(id.uuidString)","posts":["Old draft"],"updated":"2026-10-01T10:00:00Z"}]"#.utf8).write(to: url)
+        let loaded = try XCTUnwrap(DraftStore(url: url).draft(id))
+        XCTAssertEqual(loaded.posts, ["Old draft"])
+        XCTAssertNil(loaded.target)
+    }
 }

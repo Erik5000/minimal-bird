@@ -12,6 +12,9 @@
   const loginPaths = new Set(['/login', '/i/flow/login', '/i/jf/onboarding/web', '/account/access',
     '/account/login_challenge', '/account/begin_password_reset', '/account/reset_password']);
   const landingPaths = new Set(['/', '/home', '/i/flow/consent_flow']);
+  // The native app sets this before the document starts. Without it, no
+  // profile or post page is ever recognized.
+  const ownHandle = String(window.__minimalBirdOwnHandle || '').replace(/^@/, '').toLowerCase();
   const editorSelector = '[data-testid^="tweetTextarea_"][contenteditable="true"], [data-testid^="tweetTextarea_"] [contenteditable="true"]';
   const postSelector = '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]';
   let surface = null;
@@ -263,6 +266,9 @@
       visibility: hidden !important; pointer-events: none !important;
     }
     [data-mb-hidden] { display: none !important; }
+    /* The old post that a new post updates or quotes: visible, never a doorway. */
+    [data-mb-surface="composer"] [data-mb-context],
+    [data-mb-surface="composer"] [data-mb-context] * { visibility: visible !important; pointer-events: none !important; }
     /* Close/back keep their slot so X's header keeps Post where X put it. */
     [data-mb-concealed], [data-mb-concealed] * { visibility: hidden !important; pointer-events: none !important; }
     html, body { background: var(--mb-paper) !important; }
@@ -489,21 +495,38 @@
       if (landingPaths.has(path) && composerPaths.has(url.searchParams.get('@modal'))) return 'composer';
       if (loginPaths.has(path)) return 'login';
       if (landingPaths.has(path)) return 'landing';
+      // Only the signed-in account's pages. They load behind the curtain and
+      // are never a visible surface. NavigationPolicy holds the same rule.
+      const parts = path.slice(1).split('/');
+      if (ownHandle && parts[0].toLowerCase() === ownHandle) {
+        if (parts.length === 2 && parts[1] === 'with_replies') return 'posts';
+        if (parts.length === 3 && parts[1] === 'status' && /^\d{1,25}$/.test(parts[2])) return 'postTarget';
+      }
       return 'blocked';
     } catch { return 'blocked'; }
   }
 
+  /// An old post is shown beside the editor only for an in_reply_to link.
+  const isReplyComposer = () => new URL(location.href).searchParams.has('in_reply_to');
+
   function findComposer() {
+    // X can mount its composer dialog after the page behind it has rendered
+    // an inline reply box. A dialog therefore always wins, even over a surface
+    // that is already showing.
+    for (const node of document.querySelectorAll(editorSelector)) {
+      const dialog = node.closest('[role="dialog"]');
+      if (dialog?.querySelector(postSelector)) return dialog;
+    }
     if (surface?.isConnected && surface.querySelector(editorSelector) && surface.querySelector(postSelector)) return surface;
     const editor = document.querySelector(editorSelector);
     if (!editor) return null;
-    const dialog = editor.closest('[role="dialog"]');
-    if (dialog?.querySelector(postSelector)) return dialog;
     // X can use an inline composer at narrow window sizes. Select only its
     // smallest self-contained ancestor; never expose the primary column.
     let candidate = editor.parentElement;
+    const allowedPosts = isReplyComposer() ? 1 : 0;
     while (candidate && candidate !== document.body) {
-      if (candidate.querySelector('[data-testid="tweet"], [data-testid="AppTabBar_Home_Link"], [data-testid="sidebarColumn"], [data-testid="cellInnerDiv"]')) return null;
+      if (candidate.querySelectorAll('[data-testid="tweet"]').length > allowedPosts
+          || candidate.querySelector('[data-testid="AppTabBar_Home_Link"], [data-testid="sidebarColumn"], [data-testid="cellInnerDiv"]')) return null;
       if (candidate.querySelector(postSelector)) return candidate;
       candidate = candidate.parentElement;
     }
@@ -511,24 +534,31 @@
   }
 
   function profile() {
-    // Read only the account label, never timeline content or login fields.
+    // Read only the account label here, never login fields. The only post
+    // content the app reads is the account's own posts, in reportPosts below.
     const account = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
-    const avatar = findComposer()?.querySelector('[data-testid^="UserAvatar-Container-"]');
+    const avatar = [...(findComposer()?.querySelectorAll('[data-testid^="UserAvatar-Container-"]') || [])]
+      .find(node => !node.closest('[data-mb-context]'));
     const avatarHandle = avatar?.dataset.testid?.match(/^UserAvatar-Container-([A-Za-z0-9_]{1,15})$/)?.[1];
     const handle = account?.textContent?.match(/@[A-Za-z0-9_]{1,15}\b/)?.[0] || (avatarHandle ? '@' + avatarHandle : null);
     return handle ? { handle } : {};
   }
 
   function hasAuthoringMedia(root) {
-    if (root.querySelector('[data-testid="attachments"], [data-testid="mediaPreview"], [data-testid="tweetPhoto"], video, canvas')) return true;
+    // The post being updated or quoted comes back from its link. It is not an attachment.
+    if ([...root.querySelectorAll('[data-testid="mediaPreview"], [data-testid="tweetPhoto"], video, canvas')]
+      .some(node => !node.closest('[data-mb-context]'))) return true;
+    if ([...root.querySelectorAll('[data-testid="attachments"]')].some(box => !box.children.length
+      || [...box.children].some(child => !child.matches('[data-mb-context]')))) return true;
     // Avatars and link-card previews come back from the text; they are not attachments.
-    const ignored = node => node.closest('[data-testid^="UserAvatar-Container-"], [data-testid^="card."], a[aria-disabled="true"]');
+    const ignored = node => node.closest('[data-testid^="UserAvatar-Container-"], [data-testid^="card."], a[aria-disabled="true"], [data-mb-context]');
     if ([...root.querySelectorAll('img[src]')].some(image => !ignored(image))) return true;
     return [...root.querySelectorAll('div')].some(node => !ignored(node) && getComputedStyle(node).backgroundImage.includes('url('));
   }
 
   function restrictSurface(root, mode) {
     root.querySelectorAll('a[href]').forEach(link => {
+      if (link.closest('[data-mb-context]')) return; // Inert, and its text stays whole.
       const destination = routeOf(link.href);
       // Help links and profile links cannot open a browser from this app.
       if (destination === 'blocked' || destination === 'landing') {
@@ -560,6 +590,101 @@
     }
   }
 
+  /// Marks the old post beside the editor: X's reply context, or its quote card.
+  function markContext(root) {
+    const mark = node => { node.setAttribute('data-mb-context', ''); node.inert = true; };
+    if (isReplyComposer()) root.querySelectorAll('[data-testid="tweet"]').forEach(mark);
+    root.querySelectorAll('[data-testid="attachments"]').forEach(box => {
+      for (const child of box.children) if (child.querySelector('[data-testid="User-Name"]')) mark(child);
+    });
+  }
+
+  // ---- My posts: read the account's own posts for the native list. ----
+
+  const nestedPost = '[role="link"]:not(a)'; // X's card for a post quoted inside a post.
+  let postsReported = false;
+
+  /// The post's own permalink. Reposts and other people's posts return null.
+  function ownPermalink(article) {
+    for (const link of article.querySelectorAll('a[href*="/status/"]')) {
+      const time = link.querySelector('time');
+      if (!time || link.closest(nestedPost)) continue;
+      const match = /^\/([A-Za-z0-9_]{1,15})\/status\/(\d{1,25})$/.exec(link.getAttribute('href') || '');
+      return match && match[1].toLowerCase() === ownHandle ? { id: match[2], time: time.dateTime } : null;
+    }
+    return null;
+  }
+
+  /// X draws emoji as images. Their alt text is the emoji itself.
+  function readableText(node) {
+    let text = '';
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) text += child.nodeValue;
+      else if (child.nodeName === 'IMG') text += child.getAttribute('alt') || '';
+      else if (child.nodeType === Node.ELEMENT_NODE) text += readableText(child);
+    }
+    return text;
+  }
+
+  /// Sends only each post's id, text, time and a media flag. Never counts.
+  function reportPosts() {
+    const posts = [];
+    const seen = new Set();
+    for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
+      const permalink = ownPermalink(article);
+      if (!permalink || seen.has(permalink.id)) continue;
+      seen.add(permalink.id);
+      const body = [...article.querySelectorAll('[data-testid="tweetText"]')].find(node => !node.closest(nestedPost));
+      const media = [...article.querySelectorAll('[data-testid="tweetPhoto"], [data-testid="videoPlayer"], video')]
+        .some(node => !node.closest(nestedPost));
+      posts.push({ id: permalink.id, text: body ? readableText(body).trim() : '', time: permalink.time, media });
+    }
+    // X can briefly empty its list while it renders. Keep the list on screen.
+    if (posts.length) { postsReported = true; report('posts', { posts }); }
+    else if (!postsReported) report('loading');
+  }
+
+  window.__minimalBirdShowOlderPosts = () => {
+    if (routeOf(location.href) !== 'posts') return false;
+    scrollTo(0, document.documentElement.scrollHeight);
+    return true;
+  };
+
+  function internalClick(node) {
+    internalNavigation = true;
+    try { node.click(); } finally { internalNavigation = false; }
+  }
+
+  // Opens X's own quote composer for one of the account's posts. Only the
+  // menu's link to the composer is ever pressed, so Repost cannot fire.
+  let quoteOpening = false;
+  let quoteComposerRequested = false;
+  const contextExpected = () => isReplyComposer() || quoteComposerRequested;
+  window.__minimalBirdOpenQuote = async (id, timeout = 9000) => {
+    if (quoteOpening || !['posts', 'postTarget'].includes(routeOf(location.href))) return 'failed';
+    quoteOpening = true;
+    try {
+      const repostControl = () => [...document.querySelectorAll('article[data-testid="tweet"]')]
+        .find(node => ownPermalink(node)?.id === id)?.querySelector('[data-testid="retweet"], [data-testid="unretweet"]');
+      const quoteLink = () => document.querySelector(
+        '[role="menu"] a[role="menuitem"][href="/compose/post"], [role="menu"] a[role="menuitem"][href="/compose/tweet"]');
+      if (!(await waitFor(repostControl, timeout))) return 'failed';
+      // X can ignore a press while it still hydrates the page. Pressing the
+      // control again only opens the same menu, so a retry is safe.
+      let quote = null;
+      for (let attempt = 0; attempt < 2 && !quote; attempt += 1) {
+        const control = repostControl();
+        if (!control) return 'failed';
+        if (!quoteLink()) internalClick(control);
+        quote = await waitFor(quoteLink, 2000);
+      }
+      if (!quote) return 'failed';
+      quoteComposerRequested = true;
+      internalClick(quote);
+      return 'ok';
+    } finally { quoteOpening = false; }
+  };
+
   function scan() {
     scheduled = false;
     observer.disconnect();
@@ -581,7 +706,10 @@
       }
     } else if (route === 'composer') {
       const root = findComposer();
-      if (root) {
+      if (root) markContext(root);
+      // X can still be mounting the composer for an old post. Without the old
+      // post beside it, the editor could be a different composer: stay covered.
+      if (root && (!contextExpected() || root.querySelector('[data-mb-context]'))) {
         restrictSurface(root, 'composer');
         showSurface(root, 'composer');
         updatePopovers(root);
@@ -603,6 +731,10 @@
         // Do not claim a successful post from a click or a disappearing dialog.
         // X owns submission; the native completion screen states this explicitly.
         report('finished');
+      } else if (route === 'posts') {
+        reportPosts();
+      } else if (route === 'postTarget') {
+        report('postTarget');
       } else if (route === 'landing') {
         report('needsComposer');
       } else {

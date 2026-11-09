@@ -3,11 +3,25 @@
 
 import Foundation
 
+/// An existing post that a new post adds to or quotes.
+public struct PostTarget: Codable, Equatable {
+    public enum Kind: String, Codable { case reply, quote }
+    public let kind: Kind
+    public let id: String
+
+    public init(kind: Kind, id: String) {
+        self.kind = kind
+        self.id = id
+    }
+}
+
 /// Text of an unposted post or thread. Attachments and polls stay with X.
 public struct Draft: Codable, Equatable, Identifiable {
     public let id: UUID
     public var posts: [String]
     public var updated: Date
+    /// Nil for a plain post, and for drafts saved before targets existed.
+    public var target: PostTarget?
 
     /// The first line with text, for compact lists.
     public var preview: String {
@@ -58,21 +72,22 @@ public final class DraftStore {
     /// Saves `posts` under `id`, or as a new draft when `id` is nil or unknown.
     /// Text-free posts remove the draft instead. Returns the draft's id.
     @discardableResult
-    public func save(_ posts: [String], id: UUID?, now: Date = Date(), preserving protectedID: UUID? = nil) -> UUID? {
+    public func save(_ posts: [String], id: UUID?, now: Date = Date(), preserving protectedID: UUID? = nil, target: PostTarget? = nil) -> UUID? {
         guard Draft.hasText(posts) else {
             if let id { remove(id) }
             return nil
         }
         if let id, let index = drafts.firstIndex(where: { $0.id == id }) {
-            guard drafts[index].posts != posts else { return id }
+            guard drafts[index].posts != posts || drafts[index].target != target else { return id }
             var draft = drafts.remove(at: index)
             draft.posts = posts
+            draft.target = target
             draft.updated = now
             insert(draft)
             dirty = true
             return id
         }
-        let draft = Draft(id: id ?? UUID(), posts: posts, updated: now)
+        let draft = Draft(id: id ?? UUID(), posts: posts, updated: now, target: target)
         insert(draft)
         while drafts.count > Self.limit, let index = drafts.lastIndex(where: { $0.id != protectedID && $0.id != draft.id }) {
             drafts.remove(at: index)

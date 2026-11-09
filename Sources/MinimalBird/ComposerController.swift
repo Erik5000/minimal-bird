@@ -26,6 +26,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     private let coverButton = NSButton(title: "", target: nil, action: nil)
     private let spinner = NSProgressIndicator()
     private var draftsPanel: DraftsPanel!
+    private var postsPanel: PostsPanel!
     private var libraryTop: NSLayoutConstraint!
     private var timeout: Timer?
     private var state = "loading"
@@ -56,6 +57,23 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     private let saveFailureMessage = "Drafts not saved. Keep this app open."
     private var persistTimer: Timer?
     private var refreshTimer: Timer?
+    /// The signed-in account, as X's composer reports it.
+    private var ownHandle: String?
+    /// The old post the open composer updates or quotes.
+    private var currentTarget: PostTarget?
+    private var quoteAttempt: UUID?
+    private var ownPosts: [String: OwnPost] = [:]
+    /// The draft to reopen with Back to editor after My posts.
+    private var draftBeforePosts: UUID?
+    /// WebKit pauses list updates in a hidden view. Keep X's page drawn, under
+    /// its curtain and a native view, while the app works with the post pages.
+    private var webAwake = false
+    private let postTimes: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    var canShowPosts: Bool { ownHandle != nil }
     var accountChanged: ((String) -> Void)?
 
     init(dataStore: WKWebsiteDataStore, drafts: DraftStore) {
@@ -76,15 +94,8 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         configuration.userContentController.add(WeakFocusHandler(self), name: "focus")
-        if CommandLine.arguments.contains("--diagnose") {
-            configuration.userContentController.addUserScript(WKUserScript(source: "window.__minimalBirdDiagnose = true;",
-                injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        }
-        if let source = Resource.read("focus", extension: "js") {
-            configuration.userContentController.addUserScript(WKUserScript(source: source,
-                injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        }
         webView = WKWebView(frame: .zero, configuration: configuration)
+        installUserScripts()
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = false
@@ -100,7 +111,8 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             guard let self else { return }
             UserDefaults.standard.set(expanded, forKey: "DraftsExpanded")
             self.libraryTop.isActive = expanded
-            self.webView.isHidden = expanded || !["composer", "login"].contains(self.state)
+            self.webView.isHidden = expanded || !(["composer", "login", "posts"].contains(self.state) || self.webAwake)
+            self.syncPostsPanel()
             self.view.layoutSubtreeIfNeeded()
             if expanded { self.view.window?.makeFirstResponder(self.draftsPanel) }
             else { self.restoreEditorFocus() }
@@ -112,6 +124,13 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         draftsPanel.onNew = { [weak self] in self?.newPost() }
         draftsPanel.onLibrary = { [weak self] in self?.showDraftLibrary() }
         draftsPanel.onResume = { [weak self] in self?.resumeDraft() }
+        draftsPanel.onPosts = { [weak self] in self?.showPosts() }
+
+        postsPanel = PostsPanel()
+        postsPanel.isHidden = true
+        postsPanel.onUpdate = { [weak self] id in self?.openPost(PostTarget(kind: .reply, id: id)) }
+        postsPanel.onQuote = { [weak self] id in self?.openPost(PostTarget(kind: .quote, id: id)) }
+        postsPanel.onOlder = { [weak self] in self?.showOlderPosts() }
 
         cover.wantsLayer = true
         cover.layer?.backgroundColor = Palette.paper.cgColor
@@ -138,24 +157,35 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         coverStack.setCustomSpacing(6, after: coverTitle)
         coverStack.setCustomSpacing(20, after: coverDetail)
         cover.addSubview(coverStack)
-        for child in [webView!, cover, draftsPanel!] {
+        for child in [webView!, cover, postsPanel!, draftsPanel!] {
             child.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(child)
         }
         coverStack.translatesAutoresizingMaskIntoConstraints = false
         libraryTop = draftsPanel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor)
+        // In a wide view X opens its composer as a dialog over the page behind
+        // it, and the next full page load can stay blank. One column keeps X in
+        // the full-page composer layout that the app is checked against.
+        let fillWidth = webView.widthAnchor.constraint(equalTo: view.widthAnchor)
+        fillWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
             webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            webView.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
+            webView.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor),
+            fillWidth,
             webView.bottomAnchor.constraint(equalTo: draftsPanel.topAnchor),
             draftsPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             draftsPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             draftsPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             cover.topAnchor.constraint(equalTo: webView.topAnchor),
-            cover.leadingAnchor.constraint(equalTo: webView.leadingAnchor),
-            cover.trailingAnchor.constraint(equalTo: webView.trailingAnchor),
+            cover.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            cover.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             cover.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
+            postsPanel.topAnchor.constraint(equalTo: webView.topAnchor),
+            postsPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            postsPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            postsPanel.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
             coverStack.centerXAnchor.constraint(equalTo: cover.centerXAnchor),
             coverStack.centerYAnchor.constraint(equalTo: cover.centerYAnchor, constant: -16),
             coverStack.widthAnchor.constraint(equalTo: cover.widthAnchor, constant: -64),
@@ -163,6 +193,34 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             coverIcon.heightAnchor.constraint(equalToConstant: 36)
         ])
         refreshDrafts()
+    }
+
+    /// focus.js reads the handle once at document start. A handle change
+    /// therefore takes effect with the next page the app loads.
+    private func installUserScripts() {
+        let scripts = webView.configuration.userContentController
+        scripts.removeAllUserScripts()
+        var sources: [String] = []
+        if CommandLine.arguments.contains("--diagnose") { sources.append("window.__minimalBirdDiagnose = true;") }
+        if let ownHandle, NavigationPolicy.postsURL(handle: ownHandle) != nil { // Letters, digits and _ only.
+            sources.append("window.__minimalBirdOwnHandle = '\(ownHandle)';")
+        }
+        if let source = Resource.read("focus", extension: "js") { sources.append(source) }
+        for source in sources {
+            scripts.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
+    }
+
+    private func setOwnHandle(_ handle: String?) {
+        guard handle != ownHandle else { return }
+        ownHandle = handle
+        installUserScripts()
+        syncPostsPanel()
+    }
+
+    private func syncPostsPanel() {
+        postsPanel?.isHidden = state != "posts" || draftsExpanded
+        draftsPanel?.updatePostsAction(canShow: canShowPosts, showing: state == "posts")
     }
 
     // WebKit sends key events the page did not mark as handled back up the
@@ -199,13 +257,21 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         webView.loadHTMLString(html, baseURL: NavigationPolicy.composerURL)
     }
 
+    /// Self-test only: the synthetic page for the next load, at its real address.
+    func setFixture(_ html: String) { fixtureHTML = html }
+
+    private func loadPage(_ url: URL) {
+        if let fixtureHTML { webView.loadHTMLString(fixtureHTML, baseURL: url) }
+        else { webView.load(URLRequest(url: url)) }
+    }
+
     /// Self-test only: the window with the web content drawn in, since a
     /// view snapshot cannot capture WebKit's separate rendering process.
     func snapshotWindow() async -> NSBitmapImageRep? {
         guard let frameView = view.window?.contentView?.superview,
               let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else { return nil }
         frameView.cacheDisplay(in: frameView.bounds, to: rep)
-        guard !webView.isHidden, let page = try? await webView.takeSnapshot(configuration: nil) else { return rep }
+        guard !webView.isHidden, cover.isHidden, postsPanel.isHidden, let page = try? await webView.takeSnapshot(configuration: nil) else { return rep }
         let rect = webView.convert(webView.bounds, to: frameView)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
@@ -215,8 +281,9 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     }
 
     private func showCover(title: String, detail: String, symbol: String, button: String? = nil, loading: Bool = false) {
-        webView.isHidden = true
+        webView.isHidden = !webAwake
         cover.isHidden = false
+        syncPostsPanel()
         coverTitle.stringValue = title
         coverDetail.stringValue = detail
         coverDetail.isHidden = detail.isEmpty
@@ -229,7 +296,25 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
 
     /// Loads a fresh composer document. Its text is either already saved in
     /// Drafts or waiting in `pendingDraft`, so it never inherits a draft.
-    private func loadComposer() {
+    /// With a target, X's own reply or quote composer opens for that post.
+    private func loadComposer(target: PostTarget? = nil) {
+        var url = NavigationPolicy.composerURL
+        if let target {
+            let linked = target.kind == .reply ? NavigationPolicy.replyURL(to: target.id)
+                : ownHandle.flatMap { NavigationPolicy.statusURL(handle: $0, id: target.id) }
+            guard let linked else {
+                pendingDraft = nil
+                draftsPanel.flash("Wait for X to finish opening, then try again.")
+                return
+            }
+            url = linked
+        }
+        beginLoad(target: target, awake: target?.kind == .quote, title: target == nil ? "Opening X…" : "Opening your post…")
+        loadPage(url)
+        armTimeout()
+    }
+
+    private func beginLoad(target: PostTarget?, awake: Bool, title: String) {
         activeDocumentID = nil
         navigationGeneration = UUID()
         restorationID = nil
@@ -238,14 +323,14 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         draft = false
         unsavedExtras = false
         currentDraftID = nil
+        currentTarget = target
+        quoteAttempt = nil
+        webAwake = awake
         refreshDrafts()
         state = "loading"
         openedAt = Date()
         warmOpening = false
-        showCover(title: "Opening X…", detail: "", symbol: "square.and.pencil", loading: true)
-        if let fixtureHTML { webView.loadHTMLString(fixtureHTML, baseURL: NavigationPolicy.composerURL) }
-        else { webView.load(URLRequest(url: NavigationPolicy.composerURL)) }
-        armTimeout()
+        showCover(title: title, detail: "", symbol: "square.and.pencil", loading: true)
     }
 
     private func armTimeout() {
@@ -253,6 +338,11 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         timeout = Timer.scheduledTimer(withTimeInterval: 25, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.state == "loading" else { return }
+                if self.webAwake {
+                    self.showCover(title: "Your post didn’t open.", detail: "X hasn’t shown this page. Go back and try again; if it persists, X may have changed its layout.",
+                        symbol: "eye.slash", button: "Back to writing")
+                    return
+                }
                 self.showCover(title: "Your feed stays out of sight.",
                     detail: "X hasn’t shown a recognizable sign-in form or composer. Try again; if it persists, X may have changed its layout.",
                     symbol: "eye.slash", button: "Try again")
@@ -307,8 +397,103 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         afterSavingComposer(discardExtras: false) { [weak self] in self?.draftsPanel.setExpanded(true) }
     }
 
+    /// Saves the current text, then shows the account's own posts.
+    @objc func showPosts() {
+        afterSavingComposer(discardExtras: true) { [weak self] in
+            guard let self else { return }
+            self.draftsPanel.setExpanded(false)
+            self.loadPosts()
+        }
+    }
+
+    private func loadPosts() {
+        guard let ownHandle, let url = NavigationPolicy.postsURL(handle: ownHandle) else {
+            draftsPanel.flash("Wait for X to finish opening, then try again.")
+            return
+        }
+        draftBeforePosts = currentDraftID ?? (state == "posts" ? draftBeforePosts : nil)
+        pendingDraft = nil
+        ownPosts = [:]
+        postsPanel.update([])
+        beginLoad(target: nil, awake: true, title: "Opening your posts…")
+        loadPage(url)
+        armTimeout()
+    }
+
+    private func openPost(_ target: PostTarget) {
+        guard !capturingDraft, !restoringDraft else { return }
+        pendingDraft = nil
+        if target.kind == .quote && state == "posts" { quoteFromList(target) }
+        else { loadComposer(target: target) }
+    }
+
+    /// X's list is already loaded behind the native rows, so Quote needs no
+    /// new page. If X has dropped that post from its list, open the post's page.
+    private func quoteFromList(_ target: PostTarget) {
+        let attempt = UUID()
+        quoteAttempt = attempt
+        currentTarget = target
+        currentDraftID = nil
+        state = "loading"
+        showCover(title: "Opening your post…", detail: "", symbol: "square.and.pencil", loading: true)
+        armTimeout()
+        webView.callAsyncJavaScript("return await window.__minimalBirdOpenQuote(id, 400)", arguments: ["id": target.id], in: nil, in: .page) { [weak self] result in
+            guard let self, self.quoteAttempt == attempt else { return }
+            if (try? result.get()) as? String == "ok" { return } // focus.js reports the composer.
+            self.quoteAttempt = nil
+            self.loadComposer(target: target)
+        }
+    }
+
+    private func mergeOwnPosts(_ value: Any?) {
+        guard let rows = value as? [[String: Any]] else { return }
+        for row in rows.prefix(100) {
+            guard let id = row["id"] as? String, NavigationPolicy.replyURL(to: id) != nil else { continue }
+            ownPosts[id] = OwnPost(id: id, text: String((row["text"] as? String ?? "").prefix(30_000)),
+                                   time: (row["time"] as? String).flatMap(postTimes.date(from:)),
+                                   media: row["media"] as? Bool ?? false)
+        }
+        postsPanel.update(ownPosts.values.sorted {
+            ($0.time ?? .distantPast, $0.id) > ($1.time ?? .distantPast, $1.id)
+        })
+    }
+
+    /// X adds older posts when its page reaches the end of the list.
+    private func showOlderPosts() {
+        let before = ownPosts.count
+        webView.evaluateJavaScript("window.__minimalBirdShowOlderPosts?.() ?? false", completionHandler: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let self, self.state == "posts", self.ownPosts.count == before else { return }
+            self.draftsPanel.flash("No older posts appeared.")
+        }
+    }
+
+    /// X's post page is open under the curtain. Ask it for its quote composer.
+    private func openPendingQuote() {
+        guard let target = currentTarget, target.kind == .quote else { redirectToComposer(); return }
+        guard quoteAttempt == nil else { return }
+        let attempt = UUID()
+        quoteAttempt = attempt
+        webView.callAsyncJavaScript("return await window.__minimalBirdOpenQuote(id)", arguments: ["id": target.id], in: nil, in: .page) { [weak self] result in
+            guard let self, self.quoteAttempt == attempt else { return }
+            if (try? result.get()) as? String == "ok" { return } // X opens the composer; focus.js reports it.
+            self.draftsPanel.flash("X didn’t open this post. Try again.")
+            self.currentTarget = nil
+            self.loadPosts()
+        }
+    }
+
+    private func returnToComposer() {
+        let saved = draftBeforePosts.flatMap { drafts.draft($0) }
+        draftBeforePosts = nil
+        pendingDraft = saved
+        draftsPanel.setExpanded(false)
+        loadComposer(target: saved?.target)
+    }
+
     @objc func resumeDraft() {
         guard !capturingDraft, !restoringDraft else { return }
+        if state == "posts" { returnToComposer(); return }
         draftsPanel.setExpanded(false)
         restoreEditorFocus()
     }
@@ -377,6 +562,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     }
 
     @objc func reloadPage() {
+        if state == "posts" { loadPosts(); return }
         afterSavingComposer(discardExtras: true) { [weak self] in self?.reloadKeepingText() }
     }
 
@@ -385,7 +571,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         redirects = 0
         if pendingDraft == nil, let id = currentDraftID, let saved = drafts.draft(id) { pendingDraft = saved }
         currentDraftID = nil
-        loadComposer()
+        loadComposer(target: currentTarget)
     }
 
     @objc func toggleDrafts() {
@@ -443,6 +629,10 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         draft = false
         currentDraftID = nil
         pendingDraft = nil
+        currentTarget = nil
+        draftBeforePosts = nil
+        webAwake = false
+        setOwnHandle(nil)
         state = "signingOut"
         showCover(title: "Clearing your session…", detail: "", symbol: "person.crop.circle", loading: true)
         webView.configuration.websiteDataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { [weak self] in
@@ -488,7 +678,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         guard !restoringDraft, !capturingDraft, !draftsExpanded, state == "composer" else { return }
         if Draft.hasText(posts) {
             if let id = currentDraftID, drafts.draft(id)?.posts == posts { return }
-            currentDraftID = drafts.save(posts, id: currentDraftID, preserving: protectedDraftID)
+            currentDraftID = drafts.save(posts, id: currentDraftID, preserving: protectedDraftID, target: currentTarget)
         } else { return } // Only the explicit Delete action removes saved text.
         if !saveFailed { draftsPanel.status = "Saving changes…" }
         schedulePersist()
@@ -509,7 +699,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         guard alert.runModal() == .alertSecondButtonReturn else { return }
         drafts.remove(id)
         guard persistDrafts() else {
-            drafts.save(saved.posts, id: saved.id, now: saved.updated)
+            drafts.save(saved.posts, id: saved.id, now: saved.updated, target: saved.target)
             refreshDrafts()
             return
         }
@@ -539,14 +729,18 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
 
     private func restoreSavedDraft(_ id: UUID) {
         guard let saved = drafts.draft(id) else { return }
+        if saved.target?.kind == .quote && ownHandle == nil {
+            draftsPanel.flash("Wait for X to finish opening, then try again.")
+            return
+        }
         draftsPanel.setExpanded(false)
         pendingDraft = saved
-        if state == "composer" && !unsavedExtras {
+        if state == "composer" && !unsavedExtras && currentTarget == saved.target {
             insertPendingDraft()
-        } else if state != "loading" || demo {
+        } else if state != "loading" || demo || currentTarget != saved.target {
             demo = false
             currentDraftID = nil
-            loadComposer()
+            loadComposer(target: saved.target)
         } // While loading, the draft is inserted once the composer appears.
     }
 
@@ -588,7 +782,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             case "reload":
                 // The composer holds a thread; start from a clean one, then insert.
                 self.currentDraftID = nil
-                self.loadComposer()
+                self.loadComposer(target: self.currentTarget)
             default:
                 self.pendingDraft = nil
                 self.currentDraftID = nil
@@ -645,7 +839,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame,
               let url = message.frameInfo.request.url,
-              NavigationPolicy.destination(for: url) != .blocked,
+              NavigationPolicy.destination(for: url, ownHandle: ownHandle) != .blocked,
               let body = message.body as? [String: Any], let next = body["state"] as? String,
               state != "signingOut" else { return }
         guard let activeDocumentID, body["documentID"] as? String == activeDocumentID else { return }
@@ -673,15 +867,29 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         if next == "composer", let handle = body["handle"] as? String,
            handle.range(of: "^@[A-Za-z0-9_]{1,15}$", options: .regularExpression) != nil {
             accountChanged?(handle)
+            setOwnHandle(handle)
         }
         let previousState = state
         if next == "finished" && (draftsExpanded || capturingDraft) { return }
         state = next
-        defer { draftsPanel.updateActions(canSave: state == "composer", busy: restoringDraft || capturingDraft) }
+        defer {
+            draftsPanel.updateActions(canSave: state == "composer", busy: restoringDraft || capturingDraft)
+            syncPostsPanel()
+        }
         if CommandLine.arguments.contains("--diagnose") { print("Focus state: \(next), elapsed: \(String(format: "%.2f", Date().timeIntervalSince(openedAt)))s, warm: \(warmOpening)"); fflush(stdout) }
         switch next {
+        case "posts":
+            timeout?.invalidate()
+            cover.isHidden = true
+            webView.isHidden = draftsExpanded // It stays awake under the native list.
+            mergeOwnPosts(body["posts"])
+            if previousState != "posts" { draftsPanel.status = saveFailed ? saveFailureMessage : "" }
+        case "postTarget":
+            // X left the composer without a post. Return to the list.
+            if previousState == "composer" { loadPosts() } else { openPendingQuote() }
         case "composer", "login":
             timeout?.invalidate()
+            webAwake = false
             cover.isHidden = true
             webView.isHidden = draftsExpanded
             draftsPanel.status = saveFailed ? saveFailureMessage : next == "login" ? "Sign in with your X username and password." : ""
@@ -690,9 +898,11 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             }
         case "finished":
             timeout?.invalidate()
+            webAwake = false
             // X closed the composer after Post; the posted text leaves Drafts.
             if let id = currentDraftID { drafts.remove(id); persistDrafts() }
             currentDraftID = nil
+            currentTarget = nil
             draft = false
             unsavedExtras = false
             refreshDrafts()
@@ -703,7 +913,8 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         case "blocked":
             showCover(title: "Stay with your thought.", detail: "Only the composer is available here.", symbol: "eye.slash", button: "Back to writing")
         default:
-            showCover(title: "Opening composer…", detail: "", symbol: "square.and.pencil", loading: true)
+            showCover(title: currentTarget != nil ? "Opening your post…" : webAwake ? "Opening your posts…" : "Opening composer…",
+                      detail: "", symbol: "square.and.pencil", loading: true)
             armTimeout()
         }
     }
@@ -714,10 +925,11 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         lastRedirect = Date()
         guard redirects <= 3 else {
             state = "blocked"
+            webAwake = false
             showCover(title: "X needs a moment.", detail: "The composer keeps redirecting. Please try again shortly.", symbol: "arrow.clockwise", button: "Try again")
             return
         }
-        loadComposer()
+        loadComposer(target: currentTarget)
     }
 
     // MARK: WebKit
@@ -734,8 +946,10 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         }
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
         if url.absoluteString == "about:blank" { decisionHandler(.allow); return }
-        let destination = NavigationPolicy.destination(for: url)
-        guard destination != .blocked else {
+        let destination = NavigationPolicy.destination(for: url, ownHandle: ownHandle)
+        // A post page loads only when the app asked for it to quote that post.
+        let quotePageExpected = state == "loading" && currentTarget?.kind == .quote && quoteAttempt == nil
+        guard destination != .blocked, destination != .postTarget || quotePageExpected else {
             draftsPanel.flash("Only posting is available in Minimal Bird.")
             decisionHandler(.cancel)
             return
@@ -745,7 +959,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             webView.load(navigationAction.request)
             return
         }
-        webView.isHidden = true
+        webView.isHidden = !webAwake
         decisionHandler(.allow)
     }
 

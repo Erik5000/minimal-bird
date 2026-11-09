@@ -114,7 +114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for (title, action, key) in [("New draft", #selector(ComposerController.newPost), "n"),
                                      ("Save draft", #selector(ComposerController.saveDraft), "s"),
                                      ("Reload X", #selector(ComposerController.reloadPage), "r"),
-                                     ("Draft library", #selector(ComposerController.showDraftLibrary), "d")] {
+                                     ("Draft library", #selector(ComposerController.showDraftLibrary), "d"),
+                                     ("My posts", #selector(ComposerController.showPosts), "p")] {
             let item = menu.addItem(withTitle: title, action: action, keyEquivalent: key)
             item.target = controller
         }
@@ -215,6 +216,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         file.addItem(.separator())
         let toggleDrafts = file.addItem(withTitle: "Draft library", action: #selector(ComposerController.showDraftLibrary), keyEquivalent: "d")
         toggleDrafts.target = controller
+        let showPosts = file.addItem(withTitle: "My posts", action: #selector(ComposerController.showPosts), keyEquivalent: "p")
+        showPosts.target = controller
         file.addItem(.separator())
         file.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileItem.submenu = file
