@@ -12,7 +12,7 @@ This change adds a native list of the account's own posts and replies, with **Up
 
 ## Verification and limits
 
-`swift test --disable-sandbox` passes. `--self-test` passed in 4 of the 7 final runs; see the limits below. The fixtures copy the structure read from live X.
+`swift test --disable-sandbox` passes. `--self-test` passed in CI and in 8 of 8 later local runs. Three of 7 earlier local runs failed; see the limits below. The fixtures copy the structure read from live X.
 
 Read-only runs on the live site used the real `focus.js` in a test app with the signed-in store, at a width of 640 points. They repeated this order twice: Update composer, list, Quote from the list. Each composer showed the old post beside the editor. No run pressed Post or Repost. The account owner then tried the installed app by hand and reported that it works.
 
@@ -23,7 +23,7 @@ These limits remain:
 - **Show older posts** is not verified on live X. The profile header count was higher than the number of the account's own posts in the list. Scrolling to the end added nothing. The cause is not known, so the list can leave out some posts.
 - Quote from the post page did not run live on the final code. The app uses this path to reopen a quote draft, to reload a quote composer, and to quote a post that X dropped from its list. If it fails, the app shows "Your post didn't open." after 25 seconds.
 - The cause of the blank page after a wide reply composer is not known. The 640-point limit avoids the layout.
-- `--self-test` failed in 3 of the 7 final runs, and those failures came in consecutive runs. The failed checks were "composer text is reported for local drafts", "every post of a thread is reported in order", and "failed-save recovery retains the exact text". The first two read a draft report after a fixed wait of 50 milliseconds. No earlier CI run failed these checks. It is not known if this change causes the failures.
+- Three of 7 local `--self-test` runs failed on checks that compare exact editor text. The cause is not known. The test takes keyboard focus. Simulated keys inside the test app changed editor text and failed such checks, but that run also failed other checks. No record shows that keys were pressed during the 3 failed runs.
 
 # Launch check — 0.8.0 build 21, 2026-10-27
 
