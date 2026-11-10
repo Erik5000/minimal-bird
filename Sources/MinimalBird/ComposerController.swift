@@ -68,6 +68,11 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     /// WebKit pauses list updates in a hidden view. Keep X's page drawn, under
     /// its curtain and a native view, while the app works with the post pages.
     private var webAwake = false
+    /// The state to return to when X's page comes back after a release.
+    private var releasedState = "composer"
+    private var releaseAttempt: UUID?
+    /// The space above the action bar. The web view changes after a release.
+    private let webArea = NSLayoutGuide()
     private let postTimes: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -88,23 +93,6 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         view = NSView()
         view.wantsLayer = true
         view.layer?.backgroundColor = Palette.paper.cgColor
-
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = dataStore
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.mediaTypesRequiringUserActionForPlayback = .all
-        configuration.userContentController.add(WeakFocusHandler(self), name: "focus")
-        webView = WKWebView(frame: .zero, configuration: configuration)
-        installUserScripts()
-        webView.navigationDelegate = self
-        webView.uiDelegate = self
-        webView.allowsBackForwardNavigationGestures = false
-        webView.allowsLinkPreview = false
-        // A Safari-compatible UA avoids embedded-browser fallback pages. WebKit
-        // still provides the real engine and the normal website session.
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
-        webView.underPageBackgroundColor = Palette.paper
-        webView.isHidden = true
 
         draftsPanel = DraftsPanel(expanded: false)
         draftsPanel.onToggle = { [weak self] expanded in
@@ -157,42 +145,72 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         coverStack.setCustomSpacing(6, after: coverTitle)
         coverStack.setCustomSpacing(20, after: coverDetail)
         cover.addSubview(coverStack)
-        for child in [webView!, cover, postsPanel!, draftsPanel!] {
+        for child in [cover, postsPanel!, draftsPanel!] {
             child.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(child)
         }
         coverStack.translatesAutoresizingMaskIntoConstraints = false
         libraryTop = draftsPanel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor)
-        // In a wide view X opens its composer as a dialog over the page behind
-        // it, and the next full page load can stay blank. One column keeps X in
-        // the full-page composer layout that the app is checked against.
-        let fillWidth = webView.widthAnchor.constraint(equalTo: view.widthAnchor)
-        fillWidth.priority = .defaultHigh
+        view.addLayoutGuide(webArea)
         NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            webView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            webView.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
-            webView.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor),
-            fillWidth,
-            webView.bottomAnchor.constraint(equalTo: draftsPanel.topAnchor),
+            webArea.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            webArea.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webArea.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webArea.bottomAnchor.constraint(equalTo: draftsPanel.topAnchor),
             draftsPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             draftsPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             draftsPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            cover.topAnchor.constraint(equalTo: webView.topAnchor),
-            cover.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            cover.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            cover.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
-            postsPanel.topAnchor.constraint(equalTo: webView.topAnchor),
-            postsPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            postsPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            postsPanel.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
+            cover.topAnchor.constraint(equalTo: webArea.topAnchor),
+            cover.leadingAnchor.constraint(equalTo: webArea.leadingAnchor),
+            cover.trailingAnchor.constraint(equalTo: webArea.trailingAnchor),
+            cover.bottomAnchor.constraint(equalTo: webArea.bottomAnchor),
+            postsPanel.topAnchor.constraint(equalTo: webArea.topAnchor),
+            postsPanel.leadingAnchor.constraint(equalTo: webArea.leadingAnchor),
+            postsPanel.trailingAnchor.constraint(equalTo: webArea.trailingAnchor),
+            postsPanel.bottomAnchor.constraint(equalTo: webArea.bottomAnchor),
             coverStack.centerXAnchor.constraint(equalTo: cover.centerXAnchor),
             coverStack.centerYAnchor.constraint(equalTo: cover.centerYAnchor, constant: -16),
             coverStack.widthAnchor.constraint(equalTo: cover.widthAnchor, constant: -64),
             coverDetail.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
             coverIcon.heightAnchor.constraint(equalToConstant: 36)
         ])
+        installWebView()
         refreshDrafts()
+    }
+
+    /// Adds a web view without a page. It starts no web process until it loads one.
+    private func installWebView() {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = dataStore
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.mediaTypesRequiringUserActionForPlayback = .all
+        configuration.userContentController.add(WeakFocusHandler(self), name: "focus")
+        webView = WKWebView(frame: .zero, configuration: configuration)
+        installUserScripts()
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+        webView.allowsBackForwardNavigationGestures = false
+        webView.allowsLinkPreview = false
+        // A Safari-compatible UA avoids embedded-browser fallback pages. WebKit
+        // still provides the real engine and the normal website session.
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+        webView.underPageBackgroundColor = Palette.paper
+        webView.isHidden = true
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView, positioned: .below, relativeTo: cover)
+        // In a wide view X opens its composer as a dialog over the page behind
+        // it, and the next full page load can stay blank. One column keeps X in
+        // the full-page composer layout that the app is checked against.
+        let fillWidth = webView.widthAnchor.constraint(equalTo: webArea.widthAnchor)
+        fillWidth.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: webArea.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: webArea.bottomAnchor),
+            webView.centerXAnchor.constraint(equalTo: webArea.centerXAnchor),
+            webView.widthAnchor.constraint(lessThanOrEqualToConstant: 640),
+            webView.widthAnchor.constraint(lessThanOrEqualTo: webArea.widthAnchor),
+            fillWidth
+        ])
     }
 
     /// focus.js reads the handle once at document start. A handle change
@@ -356,7 +374,8 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     }
 
     func resume() {
-        if state == "finished" { newPost() }
+        if state == "released" { wakeWebContent() }
+        else if state == "finished" { newPost() }
         else { restoreEditorFocus() }
     }
 
@@ -411,7 +430,8 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             draftsPanel.flash("Wait for X to finish opening, then try again.")
             return
         }
-        draftBeforePosts = currentDraftID ?? (state == "posts" ? draftBeforePosts : nil)
+        let leavingPosts = state == "posts" || (state == "released" && releasedState == "posts")
+        draftBeforePosts = currentDraftID ?? (leavingPosts ? draftBeforePosts : nil)
         pendingDraft = nil
         ownPosts = [:]
         postsPanel.update([])
@@ -493,6 +513,12 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
 
     @objc func resumeDraft() {
         guard !capturingDraft, !restoringDraft else { return }
+        if state == "released" {
+            if releasedState == "posts" { state = "posts"; returnToComposer(); return }
+            draftsPanel.setExpanded(false)
+            wakeWebContent()
+            return
+        }
         if state == "posts" { returnToComposer(); return }
         draftsPanel.setExpanded(false)
         restoreEditorFocus()
@@ -562,6 +588,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     }
 
     @objc func reloadPage() {
+        if state == "released" { wakeWebContent(); return }
         if state == "posts" { loadPosts(); return }
         afterSavingComposer(discardExtras: true) { [weak self] in self?.reloadKeepingText() }
     }
@@ -639,6 +666,76 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
             self?.redirects = 0
             self?.loadComposer()
         }
+    }
+
+    // MARK: Releasing X's page
+
+    var isReleased: Bool { state == "released" }
+    var releaseInProgress: Bool { releaseAttempt != nil }
+
+    /// Frees X's page and its web process while the window stays out of sight.
+    /// Attachments and polls exist only in the page, so they keep it loaded.
+    /// The caller tries again later when this stops without a release.
+    func releaseWebContent() {
+        guard releaseAttempt == nil, !["released", "loading", "login", "postTarget", "signingOut"].contains(state),
+              !restoringDraft, !capturingDraft, pendingDraft == nil else { return }
+        guard state == "composer" else { discardPage(); return }
+        let attempt = UUID()
+        releaseAttempt = attempt
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            if self?.releaseAttempt == attempt { self?.releaseAttempt = nil }
+        }
+        // WebKit delays timers in a hidden page, and no typed input can still
+        // be on its way. Read the editor directly, without the settling wait.
+        let document = activeDocumentID
+        webView.callAsyncJavaScript("return window.__minimalBirdDraftSnapshot?.() ?? null", arguments: [:], in: nil, in: .page) { [weak self] result in
+            guard let self, self.releaseAttempt == attempt else { return }
+            self.releaseAttempt = nil
+            guard self.state == "composer", self.activeDocumentID == document, !self.restoringDraft, !self.capturingDraft,
+                  let snapshot = (try? result.get()) as? [String: Any], snapshot["documentID"] as? String == document,
+                  snapshot["extras"] as? Bool == false,
+                  let posts = snapshot["posts"] as? [String], !posts.isEmpty, posts.count <= 50 else { return }
+            self.autosave(posts)
+            if !Draft.hasText(posts) { self.currentDraftID = nil }
+            guard self.persistDrafts() else { return }
+            self.discardPage()
+        }
+    }
+
+    /// The window came back while the editor was being read.
+    func cancelRelease() { releaseAttempt = nil }
+
+    /// Keeps the draft, target and handle. Only the page leaves.
+    private func discardPage() {
+        timeout?.invalidate()
+        activeDocumentID = nil
+        navigationGeneration = UUID()
+        quoteAttempt = nil
+        webAwake = false
+        draft = false
+        unsavedExtras = false
+        releasedState = state
+        state = "released"
+        let page = webView!
+        page.stopLoading()
+        page.navigationDelegate = nil
+        page.uiDelegate = nil
+        page.configuration.userContentController.removeScriptMessageHandler(forName: "focus")
+        page.configuration.userContentController.removeAllUserScripts()
+        page.removeFromSuperview()
+        // AppKit kept the old web view until the first responder changed.
+        view.window?.makeFirstResponder(nil)
+        installWebView()
+        showCover(title: "Opening X…", detail: "", symbol: "square.and.pencil")
+        refreshDrafts()
+    }
+
+    /// Loads X again after a release and puts the saved text back.
+    func wakeWebContent() {
+        // The library is native. X loads when the person leaves it.
+        guard state == "released", !draftsExpanded else { return }
+        state = releasedState
+        if state == "posts" { loadPosts() } else { reloadKeepingText() }
     }
 
     // MARK: Drafts

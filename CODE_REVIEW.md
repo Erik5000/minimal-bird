@@ -1,3 +1,27 @@
+# Release of X's page — 2026-11-10
+
+After the window has been closed, minimized, or hidden for 10 minutes, the app reads the editor, writes the text to disk, and frees X's page for every opened account. The next reopen loads X again and puts the text back. Attachments, polls, an unfinished sign-in, a page load, and a draft restoration keep the page loaded. A skipped release runs again 10 minutes later while the window stays out of sight.
+
+## Findings fixed
+
+- **P1 — The old web view stayed alive.** The first full self-test failed on this check. AppKit kept the old web view until the first responder changed. The release now clears the first responder.
+- **P2 — A release from My posts lost the way back.** Back to editor from a library over My posts opened the list. ⌘P dropped the link to the draft. Both now keep the draft.
+
+## Verification and limits
+
+`swift test --disable-sandbox`: 18 tests passed. `--self-test`: 212 checks passed in 3 of 3 local runs.
+
+One live run used the real 10-minute timer, the signed-in store, and an empty composer. The page stayed hidden for 11 minutes. The editor read worked, and the web process ended. Memory fell from 289 MB to 42 MB. These totals leave out the WebKit GPU process, which this run did not count. An earlier run measured that process at about 20 MB after a release. The reopen took 1.23 seconds. The drafts file matched its backup. No post was published.
+
+These limits remain:
+
+- The live run did not restore text, because the composer was empty. Synthetic pages check that path. It uses the same reload and restoration as ⌘R.
+- The live reopen called the wake code directly. Dock click, Show Composer, deminiaturize, and unhide were not driven live. They call the same code.
+- The live run used one account. The release of an inactive account was not checked live.
+- A quote draft wakes through the post-page quote path. The My posts review lists that path as not checked live on the final code.
+- If X never shows a composer, the state stays "loading" and the page is not released. No text is at risk.
+- CI did not run.
+
 # My posts review — 2026-11-09
 
 This change adds a native list of the account's own posts and replies, with **Update** and **Quote** on each row. Update opens X's reply composer. Quote presses X's own Repost control and then the menu's Quote link. It never presses Repost in that menu.

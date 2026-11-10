@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var controllers: [UUID: ComposerController] = [:]
     private var accountsMenu = NSMenu(title: "Accounts")
     private let accountButton = NSButton()
+    private var releaseTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--self-test") {
@@ -291,7 +292,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return true
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func windowDidBecomeKey(_ notification: Notification) { controller?.restoreEditorFocus() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        windowReturned()
+        controller?.restoreEditorFocus()
+    }
+    func windowWillClose(_ notification: Notification) { windowLeftScreen() }
+    func windowDidMiniaturize(_ notification: Notification) { windowLeftScreen() }
+    func windowDidDeminiaturize(_ notification: Notification) { windowReturned() }
+    func applicationDidHide(_ notification: Notification) { windowLeftScreen() }
+    func applicationDidUnhide(_ notification: Notification) {
+        if window?.isVisible == true, window?.isMiniaturized == false { windowReturned() }
+    }
+
+    /// X's page uses far more memory than the app. A short break keeps it
+    /// loaded. The timer repeats because a release can be skipped, for example
+    /// while the composer holds an attachment.
+    private func windowLeftScreen() {
+        guard releaseTimer == nil else { return }
+        let timer = Timer(timeInterval: 10 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.controllers.values.forEach { $0.releaseWebContent() } }
+        }
+        timer.tolerance = 30
+        RunLoop.main.add(timer, forMode: .common)
+        releaseTimer = timer
+    }
+
+    private func windowReturned() {
+        releaseTimer?.invalidate()
+        releaseTimer = nil
+        controllers.values.forEach { $0.cancelRelease() }
+        controller?.wakeWebContent()
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showComposer()
         return false
@@ -299,6 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func showComposer() {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        windowReturned()
         controller.resume()
     }
     func applicationWillTerminate(_ notification: Notification) {

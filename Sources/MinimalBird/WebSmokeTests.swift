@@ -179,6 +179,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await exerciseAuthoring()
         try await checkAccountStores()
         try await exerciseNativeDraftRecovery()
+        try await exerciseRelease()
         try await exerciseOwnPosts()
         try await exerciseNativePosts()
     }
@@ -903,6 +904,205 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         button("Save draft", in: queuedPanel)?.performClick(nil)
         try await waitFor { queuedPanel.isExpanded }
         expect("Save draft includes input still queued when its button is clicked", DraftStore(url: queuedURL).drafts.first?.posts == ["Including the last queued input"])
+    }
+
+    /// X's page leaves memory while the window stays out of sight. The text
+    /// stays on disk and comes back in a new page. Synthetic pages only.
+    private func exerciseRelease() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MinimalBirdRelease-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let previousExpansion = UserDefaults.standard.object(forKey: "DraftsExpanded")
+        var windows: [NSWindow] = []
+        defer {
+            windows.forEach { $0.close() }
+            UserDefaults.standard.set(previousExpansion, forKey: "DraftsExpanded")
+            try? FileManager.default.removeItem(at: folder)
+        }
+        func waitFor(_ condition: () async throws -> Bool) async throws {
+            for _ in 0..<150 {
+                if try await condition() { return }
+                try await Task.sleep(for: .milliseconds(40))
+            }
+            throw NSError(domain: "Release fixture timed out", code: 1)
+        }
+        func web(_ controller: ComposerController) -> WKWebView { controller.view.subviews.compactMap { $0 as? WKWebView }.first! }
+        func drafts(_ controller: ComposerController) -> DraftsPanel { controller.view.subviews.compactMap { $0 as? DraftsPanel }.first! }
+        func release(_ controller: ComposerController) async throws -> Bool {
+            controller.releaseWebContent()
+            try await waitFor { !controller.releaseInProgress }
+            return controller.isReleased
+        }
+        func type(_ text: String, in controller: ComposerController) async throws {
+            _ = try await web(controller).evaluateJavaScript("document.querySelector('#editor').textContent='\(text)';document.querySelector('#editor').dispatchEvent(new Event('input',{bubbles:true}));void 0")
+        }
+        func text(_ controller: ComposerController) async -> String? {
+            (try? await web(controller).evaluateJavaScript("document.querySelector('#editor')?.textContent ?? null")) as? String
+        }
+        func button(_ title: String, in view: NSView) -> NSButton? {
+            if let button = view as? NSButton, button.title == title { return button }
+            return view.subviews.lazy.compactMap { button(title, in: $0) }.first
+        }
+        func window(for controller: ComposerController) {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 660),
+                                  styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.contentViewController = controller
+            window.setContentSize(NSSize(width: 580, height: 660))
+            window.isReleasedWhenClosed = false
+            windows.append(window)
+            window.makeKeyAndOrderFront(nil)
+        }
+        func page(_ body: String) -> String { "<!doctype html><html><head><meta charset='utf-8'></head><body>\(body)</body></html>" }
+        let editorPage = page("<div role='dialog'><a data-testid='UserAvatar-Container-Writer' href='/Writer'><img alt=''></a><div id='postEditors'><div id='editor' data-testid='tweetTextarea_0' contenteditable='true' style='white-space:pre-wrap'></div></div><button data-testid='tweetButton'>Post</button></div>")
+        func composer(_ store: DraftStore) async throws -> ComposerController {
+            let controller = ComposerController(dataStore: .nonPersistent(), drafts: store)
+            window(for: controller)
+            controller.showFixture(editorPage)
+            try await waitFor {
+                guard !web(controller).isHidden else { return false }
+                return (try? await web(controller).evaluateJavaScript("!!document.querySelector('[data-mb-surface]')")) as? Bool == true
+            }
+            return controller
+        }
+        func message(_ fields: String, from controller: ComposerController) async {
+            _ = try? await web(controller).evaluateJavaScript("window.webkit.messageHandlers.focus.postMessage({\(fields),documentID:window.__minimalBirdDocumentID});void 0")
+        }
+
+        let url = folder.appendingPathComponent("release.json")
+        let store = DraftStore(url: url)
+        let controller = try await composer(store)
+        try await type("Reported text", in: controller)
+        try await waitFor { store.drafts.first?.posts == ["Reported text"] }
+        let id = store.drafts[0].id
+        // Timers run late in a hidden page, so the release must not wait on
+        // them. It must still read what the editor holds at that moment.
+        _ = try await web(controller).evaluateJavaScript("""
+            window.__minimalBirdReadDraft=()=>new Promise(()=>{});
+            const readSnapshot=window.__minimalBirdDraftSnapshot;
+            window.__minimalBirdDraftSnapshot=()=>{
+              document.querySelector('#editor').textContent='Read at release';
+              window.__minimalBirdDraftSnapshot=readSnapshot;
+              return readSnapshot();
+            };void 0
+            """)
+        weak var oldPage = web(controller)
+        let didRelease = try await release(controller)
+        expect("release reads the editor and writes the disk first", didRelease && DraftStore(url: url).draft(id)?.posts == ["Read at release"])
+        expect("release leaves an unloaded web view", web(controller) !== oldPage && web(controller).url == nil)
+        controller.view.layoutSubtreeIfNeeded()
+        expect("the new web view keeps its layer and size", controller.view.subviews.first is WKWebView && abs(web(controller).frame.width - 580) < 1)
+        try await waitFor { oldPage == nil }
+        expect("the released web view is freed", oldPage == nil)
+        let leftAfterRelease = await withCheckedContinuation { continuation in
+            controller.prepareToLeave { continuation.resume(returning: $0) }
+        }
+        expect("quit needs no dialog after a release", leftAfterRelease)
+        controller.resume()
+        try await waitFor { drafts(controller).status == "Draft opened" }
+        let restoredText = await text(controller)
+        expect("reopening restores the text in a new page", restoredText == "Read at release" && !web(controller).isHidden)
+        expect("reopening keeps one draft under the same id", store.drafts.count == 1 && store.draft(id) != nil)
+        _ = try await web(controller).evaluateJavaScript("window.fixtureSamePage=true;void 0")
+        controller.wakeWebContent()
+        try await Task.sleep(for: .milliseconds(80))
+        expect("waking a loaded composer changes nothing", (try await web(controller).evaluateJavaScript("window.fixtureSamePage===true")) as? Bool == true)
+
+        let attached = try await composer(DraftStore(url: nil))
+        _ = try await web(attached).evaluateJavaScript("const media=document.createElement('div');media.dataset.testid='mediaPreview';document.querySelector('#postEditors').appendChild(media);void 0")
+        let attachedPage = web(attached)
+        let attachedReleased = try await release(attached)
+        expect("attachments keep X's page loaded", !attachedReleased && web(attached) === attachedPage)
+
+        let unreadable = try await composer(DraftStore(url: nil))
+        _ = try await web(unreadable).evaluateJavaScript("window.__minimalBirdDraftSnapshot=()=>null;void 0")
+        let unreadablePage = web(unreadable)
+        let unreadableReleased = try await release(unreadable)
+        expect("an unreadable editor keeps X's page loaded", !unreadableReleased && web(unreadable) === unreadablePage)
+
+        let blocked = folder.appendingPathComponent("not-a-directory")
+        try Data().write(to: blocked)
+        let failedStore = DraftStore(url: blocked.appendingPathComponent("drafts.json"))
+        let failed = try await composer(failedStore)
+        try await type("Cannot reach the disk", in: failed)
+        try await waitFor { failedStore.drafts.count == 1 }
+        let failedPage = web(failed)
+        let failedReleased = try await release(failed)
+        expect("a failed disk write keeps X's page loaded", !failedReleased && web(failed) === failedPage)
+
+        let returning = try await composer(DraftStore(url: nil))
+        let returningPage = web(returning)
+        returning.releaseWebContent()
+        returning.cancelRelease()
+        try await Task.sleep(for: .milliseconds(120))
+        expect("showing the window stops a release in progress", !returning.isReleased && web(returning) === returningPage)
+
+        let signingIn = try await composer(DraftStore(url: nil))
+        await message("state:'login'", from: signingIn)
+        try await waitFor { drafts(signingIn).status.contains("Sign in") }
+        let signingInPage = web(signingIn)
+        let signingInReleased = try await release(signingIn)
+        expect("sign-in keeps X's page loaded", !signingInReleased && web(signingIn) === signingInPage)
+
+        let lateStore = DraftStore(url: nil)
+        let late = try await composer(lateStore)
+        try await type("Kept after a late message", in: late)
+        try await waitFor { lateStore.drafts.count == 1 }
+        let latePage = web(late)
+        let lateReleased = try await release(late)
+        _ = try? await latePage.evaluateJavaScript("window.webkit?.messageHandlers?.focus?.postMessage({state:'finished',documentID:window.__minimalBirdDocumentID});void 0")
+        try await Task.sleep(for: .milliseconds(80))
+        expect("a late message from the old page changes nothing", lateReleased && late.isReleased && lateStore.drafts.count == 1)
+
+        let finished = try await composer(DraftStore(url: nil))
+        await message("state:'finished'", from: finished)
+        try await waitFor { web(finished).isHidden }
+        let finishedReleased = try await release(finished)
+        finished.resume()
+        try await waitFor { !web(finished).isHidden }
+        let finishedText = await text(finished)
+        expect("a finished post reopens as an empty composer", finishedReleased && finishedText == "")
+
+        let libraryStore = DraftStore(url: nil)
+        let library = try await composer(libraryStore)
+        try await type("From the library", in: library)
+        try await waitFor { libraryStore.drafts.count == 1 }
+        drafts(library).setExpanded(true)
+        let libraryReleased = try await release(library)
+        library.resume()
+        expect("an open library does not load X again", libraryReleased && web(library).url == nil && drafts(library).isExpanded)
+        button("Back to editor", in: drafts(library))?.performClick(nil)
+        try await waitFor { drafts(library).status == "Draft opened" }
+        let libraryText = await text(library)
+        expect("Back to editor loads X and restores the text", !drafts(library).isExpanded && libraryText == "From the library")
+
+        let postsStore = DraftStore(url: nil)
+        let posts = try await composer(postsStore)
+        try await waitFor { posts.canShowPosts }
+        try await type("Before My posts", in: posts)
+        try await waitFor { postsStore.drafts.count == 1 }
+        let list = posts.view.subviews.compactMap { $0 as? PostsPanel }.first!
+        posts.setFixture(page(Self.timelineBody))
+        posts.showPosts()
+        try await waitFor { list.rowCount == 3 && !list.isHidden }
+        let postsReleased = try await release(posts)
+        expect("My posts releases X's page and hides its list", postsReleased && list.isHidden)
+        posts.resume()
+        try await waitFor { list.rowCount == 3 && !list.isHidden }
+        posts.setFixture(editorPage)
+        button("Back to editor", in: drafts(posts))?.performClick(nil)
+        try await waitFor { drafts(posts).status == "Draft opened" }
+        let postsText = await text(posts)
+        expect("My posts still returns to the draft after a release", postsText == "Before My posts")
+
+        posts.setFixture(page(Self.timelineBody))
+        posts.showPosts()
+        try await waitFor { list.rowCount == 3 && !list.isHidden }
+        drafts(posts).setExpanded(true)
+        let releasedUnderLibrary = try await release(posts)
+        posts.setFixture(editorPage)
+        button("Back to editor", in: drafts(posts))?.performClick(nil)
+        try await waitFor { drafts(posts).status == "Draft opened" }
+        let underLibraryText = await text(posts)
+        expect("a library over My posts returns to the draft after a release", releasedUnderLibrary && underLibraryText == "Before My posts")
     }
 
     private func exerciseAuthoring() async throws {
