@@ -32,8 +32,12 @@ public enum NavigationPolicy {
         }
     }
 
-    public static func postsURL(handle: String) -> URL? {
-        username(handle).flatMap { URL(string: "https://x.com/\($0)/with_replies") }
+    /// X's profile tabs that My posts reads. Standalone posts are only on the
+    /// Posts tab; the Replies tab holds replies and the threads around them.
+    public enum PostsTab: Equatable { case posts, replies }
+
+    public static func postsURL(handle: String, tab: PostsTab = .posts) -> URL? {
+        username(handle).flatMap { URL(string: "https://x.com/\($0)" + (tab == .replies ? "/with_replies" : "")) }
     }
 
     public static func statusURL(handle: String, id: String) -> URL? {
@@ -49,7 +53,7 @@ public enum NavigationPolicy {
         guard let name = handle.flatMap(username) else { return .blocked }
         let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard parts.first?.lowercased() == name.lowercased() else { return .blocked }
-        if parts.count == 2, parts[1] == "with_replies" { return .posts }
+        if parts.count == 1 || (parts.count == 2 && parts[1] == "with_replies") { return .posts }
         if parts.count == 3, parts[1] == "status", isStatusID(parts[2]) { return .postTarget }
         return .blocked
     }

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Minimal Bird contributors
 
 import AppKit
+import FocusCore
 
 /// One of the signed-in account's posts. It holds no counts.
 struct OwnPost: Equatable, Identifiable {
@@ -13,14 +14,16 @@ struct OwnPost: Equatable, Identifiable {
     var label: String { text.isEmpty ? (media ? "Photo or video" : "Post without text") : text }
 }
 
-/// The account's own posts and replies as native rows. X's page stays hidden behind it.
+/// The account's own posts or replies as native rows. X's page stays hidden behind it.
 @MainActor
 final class PostsPanel: NSView {
     var onUpdate: ((String) -> Void)?
     var onQuote: ((String) -> Void)?
     var onOlder: (() -> Void)?
+    var onTab: ((NavigationPolicy.PostsTab) -> Void)?
     private let heading = NSTextField(labelWithString: "My posts")
-    private let detail = NSTextField(labelWithString: "Your posts and replies on X")
+    /// X's own profile tabs: standalone posts, or replies and their threads.
+    private let tabs = NSSegmentedControl(labels: ["Posts", "Replies"], trackingMode: .selectOne, target: nil, action: nil)
     private let scroll = NSScrollView()
     private let list = NSStackView()
     private let olderButton = NSButton(title: "Show older posts", target: nil, action: nil)
@@ -34,8 +37,11 @@ final class PostsPanel: NSView {
         layer?.backgroundColor = Palette.paper.cgColor
         heading.font = .systemFont(ofSize: 24, weight: .semibold)
         heading.textColor = Palette.ink
-        detail.font = .systemFont(ofSize: 12)
-        detail.textColor = Palette.muted
+        tabs.selectedSegment = 0
+        tabs.target = self
+        tabs.action = #selector(changeTab)
+        tabs.setToolTip("Your posts", forSegment: 0)
+        tabs.setToolTip("Your replies", forSegment: 1)
         olderButton.bezelStyle = .push
         olderButton.controlSize = .regular
         olderButton.target = self
@@ -50,7 +56,7 @@ final class PostsPanel: NSView {
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
-        for child in [heading, detail, scroll] {
+        for child in [heading, tabs, scroll] {
             child.translatesAutoresizingMaskIntoConstraints = false
             addSubview(child)
         }
@@ -59,9 +65,9 @@ final class PostsPanel: NSView {
         NSLayoutConstraint.activate([
             heading.topAnchor.constraint(equalTo: topAnchor, constant: 12),
             heading.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            detail.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 6),
-            detail.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
-            scroll.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 16),
+            tabs.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 10),
+            tabs.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
+            scroll.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 16),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
@@ -93,7 +99,11 @@ final class PostsPanel: NSView {
         if !posts.isEmpty { list.addArrangedSubview(olderButton) }
     }
 
+    /// Shows the tab the list was read from.
+    func show(tab: NavigationPolicy.PostsTab) { tabs.selectedSegment = tab == .replies ? 1 : 0 }
+
     @objc private func showOlder() { onOlder?() }
+    @objc private func changeTab() { onTab?(tabs.selectedSegment == 1 ? .replies : .posts) }
 }
 
 @MainActor

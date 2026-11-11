@@ -110,6 +110,7 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await check("background excluded from keyboard and accessibility", "document.querySelector('main').inert && document.querySelector('header').inert")
         try await check("close button is concealed in place and cannot be used", "(()=>{const c=document.querySelector('#close'),s=getComputedStyle(c);return s.visibility==='hidden' && s.pointerEvents==='none' && !c.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))})()")
         try await check("profile avatar remains visible", "getComputedStyle(document.querySelector('#avatar img')).visibility === 'visible'")
+        try await check("the own profile link stays disabled in the composer", "document.querySelector('#avatar').getAttribute('aria-disabled') === 'true' && document.querySelector('#avatar').tabIndex === -1")
         try await exerciseFocusAndPopovers()
         web.setFrameSize(NSSize(width: 480, height: 420))
         try await Task.sleep(for: .milliseconds(50))
@@ -254,7 +255,10 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         expect("post reports carry no counts", posts.allSatisfy { Set($0.keys) == ["id", "text", "time", "media"] })
         try await check("the profile page stays behind the curtain", "!document.querySelector('[data-mb-surface]') && ['p111','p222'].every(id => getComputedStyle(document.getElementById(id)).visibility==='hidden')")
         try await check("older posts can be requested", "window.__minimalBirdShowOlderPosts() === true")
-        for path in ["/Writer2/with_replies", "/Someone/with_replies"] {
+        await load(Self.timelineBody, path: "/Writer")
+        expect("the Posts tab is read like the Replies tab", lastPosts().compactMap { $0["id"] as? String } == ["111", "444", "555"])
+        try await check("the Posts tab stays behind the curtain", "!document.querySelector('[data-mb-surface]') && getComputedStyle(document.getElementById('p111')).visibility==='hidden'")
+        for path in ["/Writer2/with_replies", "/Someone/with_replies", "/Someone", "/Writer/reposts", "/Writer/media"] {
             await load(Self.timelineBody, path: path)
             expect("another profile is not read: \(path)", lastPosts().isEmpty && messages.contains { $0["state"] as? String == "blocked" })
         }
@@ -1103,6 +1107,37 @@ final class WebSmokeTests: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         try await waitFor { drafts(posts).status == "Draft opened" }
         let underLibraryText = await text(posts)
         expect("a library over My posts returns to the draft after a release", releasedUnderLibrary && underLibraryText == "Before My posts")
+
+        func path(_ controller: ComposerController) async -> String {
+            (try? await web(controller).evaluateJavaScript("location.pathname")) as? String ?? ""
+        }
+        func tabs(_ panel: PostsPanel) -> NSSegmentedControl? {
+            func find(_ view: NSView) -> NSSegmentedControl? {
+                (view as? NSSegmentedControl) ?? view.subviews.lazy.compactMap(find).first
+            }
+            return find(panel)
+        }
+        posts.setFixture(page(Self.timelineBody))
+        posts.showPosts()
+        try await waitFor { list.rowCount == 3 && !list.isHidden }
+        let firstTab = await path(posts)
+        expect("My posts opens X's Posts tab first", firstTab == "/Writer" && tabs(list)?.selectedSegment == 0)
+        if let control = tabs(list) {
+            control.selectedSegment = 1
+            control.sendAction(control.action, to: control.target)
+        }
+        try await waitFor { await path(posts) == "/Writer/with_replies" && list.rowCount == 3 && !list.isHidden }
+        expect("the Replies tab loads X's replies page", tabs(list)?.selectedSegment == 1)
+        posts.setFixture(editorPage)
+        button("Back to editor", in: drafts(posts))?.performClick(nil)
+        try await waitFor { drafts(posts).status == "Draft opened" }
+        let afterTabText = await text(posts)
+        expect("a tab switch keeps the way back to the draft", afterTabText == "Before My posts")
+        posts.setFixture(page(Self.timelineBody))
+        posts.showPosts()
+        try await waitFor { list.rowCount == 3 && !list.isHidden }
+        let reopenedTab = await path(posts)
+        expect("My posts reopens on the tab chosen last", reopenedTab == "/Writer/with_replies" && tabs(list)?.selectedSegment == 1)
     }
 
     private func exerciseAuthoring() async throws {

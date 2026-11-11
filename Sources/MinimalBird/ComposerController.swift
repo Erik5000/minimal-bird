@@ -65,6 +65,8 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     private var ownPosts: [String: OwnPost] = [:]
     /// The draft to reopen with Back to editor after My posts.
     private var draftBeforePosts: UUID?
+    /// The profile tab that My posts reads. It stays chosen while the app runs.
+    private var postsTab: NavigationPolicy.PostsTab = .posts
     /// WebKit pauses list updates in a hidden view. Keep X's page drawn, under
     /// its curtain and a native view, while the app works with the post pages.
     private var webAwake = false
@@ -119,6 +121,7 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         postsPanel.onUpdate = { [weak self] id in self?.openPost(PostTarget(kind: .reply, id: id)) }
         postsPanel.onQuote = { [weak self] id in self?.openPost(PostTarget(kind: .quote, id: id)) }
         postsPanel.onOlder = { [weak self] in self?.showOlderPosts() }
+        postsPanel.onTab = { [weak self] tab in self?.switchPostsTab(tab) }
 
         cover.wantsLayer = true
         cover.layer?.backgroundColor = Palette.paper.cgColor
@@ -426,10 +429,11 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
     }
 
     private func loadPosts() {
-        guard let ownHandle, let url = NavigationPolicy.postsURL(handle: ownHandle) else {
+        guard let ownHandle, let url = NavigationPolicy.postsURL(handle: ownHandle, tab: postsTab) else {
             draftsPanel.flash("Wait for X to finish opening, then try again.")
             return
         }
+        postsPanel.show(tab: postsTab)
         let leavingPosts = state == "posts" || (state == "released" && releasedState == "posts")
         draftBeforePosts = currentDraftID ?? (leavingPosts ? draftBeforePosts : nil)
         pendingDraft = nil
@@ -438,6 +442,18 @@ final class ComposerController: NSViewController, WKNavigationDelegate, WKUIDele
         beginLoad(target: nil, awake: true, title: "Opening your posts…")
         loadPage(url)
         armTimeout()
+    }
+
+    /// Loads the other profile tab. A quote that is opening or a draft that is
+    /// being read or restored keeps the current tab.
+    private func switchPostsTab(_ tab: NavigationPolicy.PostsTab) {
+        guard tab != postsTab else { return }
+        guard state == "posts", quoteAttempt == nil, !capturingDraft, !restoringDraft else {
+            postsPanel.show(tab: postsTab)
+            return
+        }
+        postsTab = tab
+        loadPosts()
     }
 
     private func openPost(_ target: PostTarget) {

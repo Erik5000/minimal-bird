@@ -499,7 +499,8 @@
       // are never a visible surface. NavigationPolicy holds the same rule.
       const parts = path.slice(1).split('/');
       if (ownHandle && parts[0].toLowerCase() === ownHandle) {
-        if (parts.length === 2 && parts[1] === 'with_replies') return 'posts';
+        // The Posts tab holds standalone posts; the Replies tab holds replies.
+        if (parts.length === 1 || (parts.length === 2 && parts[1] === 'with_replies')) return 'posts';
         if (parts.length === 3 && parts[1] === 'status' && /^\d{1,25}$/.test(parts[2])) return 'postTarget';
       }
       return 'blocked';
@@ -561,7 +562,8 @@
       if (link.closest('[data-mb-context]')) return; // Inert, and its text stays whole.
       const destination = routeOf(link.href);
       // Help links and profile links cannot open a browser from this app.
-      if (destination === 'blocked' || destination === 'landing') {
+      // The own profile is a My posts page, but never a doorway from the composer.
+      if (['blocked', 'landing', 'posts'].includes(destination)) {
         if (link.querySelector('img') || link.matches('[data-testid^="UserAvatar-Container-"]')
             || link.querySelector('[data-testid^="UserAvatar-Container-"]')) {
           // Keep the composer's avatar, but never make it a doorway to a profile.

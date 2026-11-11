@@ -57,8 +57,9 @@ Window position and size are remembered.
 
 ## My posts
 
-**My posts** lists your own posts and replies, newest first. Each row shows the text and the date. Other people's posts, reposts, and all counts stay hidden. X's page stays behind the list and is never shown.
+**My posts** lists your own posts, newest first. Each row shows the text and the date. Other people's posts, reposts, and all counts stay hidden. X's page stays behind the list and is never shown.
 
+- **Posts / Replies** switches between the Posts and Replies tabs of your X profile. Posts holds your standalone posts. Replies holds your replies and the threads around them. The app keeps your choice while it runs.
 - **Update** adds a new post under the old post. X does not let you change an old post, so the app opens X's reply composer for it.
 - **Quote** opens X's quote composer with the old post attached.
 - **Show older posts** asks X for more of your posts. X decides how many it sends.

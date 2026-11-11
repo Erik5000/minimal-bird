@@ -1,3 +1,29 @@
+# My posts reads the Posts tab — 2026-11-11
+
+The account owner reported that My posts did not show the newest posts. The installed app had the same machine code as a build from `6452ffd`, so an update did not help.
+
+## Cause
+
+X's profile now has Posts, Replies, Reposts and Media tabs. My posts read only the Replies tab (`/<handle>/with_replies`). That tab holds replies and the threads around them. Standalone posts are only on the Posts tab (`/<handle>`). A read-only probe with the signed-in store listed the posts of 7, 9 and 10 Nov on the Posts tab and not on the Replies tab.
+
+## Fix
+
+- My posts opens the Posts tab first. A **Posts / Replies** switch loads the other tab. The choice stays while the app runs.
+- `NavigationPolicy` and `focus.js` both accept `/<handle>` as a My posts page. The message guard in the native app checks the same rule, so a change in only one of them would drop the reports.
+- **P2 found during the fix:** `/<handle>` became a My posts route, so the composer's own avatar link lost its disabled state. The attachment check ignores only disabled links, so a fixture avatar counted as an attachment and kept the draft dirty. Own profile links in the composer stay disabled now. The click guard blocked the link before and after this change.
+
+## Verification and limits
+
+`swift test --disable-sandbox`: 18 tests passed. `--self-test`: 222 checks passed in 3 of 3 runs. New checks cover the Posts tab, `/<handle>/reposts` and other profiles, the tab switch, Back to editor after a tab switch, and the disabled own profile link.
+
+A read-only probe ran the fixed controller live with the signed-in store and an in-memory draft store. The Posts tab listed 7 rows, newest first: 10 Nov, 9 Nov, 7 Nov, then 6 Nov. **Show older posts** grew the list from 7 to 14 rows. The Replies tab listed 9 rows, as before. The probe logged only IDs and dates. No post or repost was made.
+
+These limits remain:
+
+- Quote from the list did not run live on the Posts tab. It presses X's Repost control to open the menu, and this check promised the owner that nothing would be posted. The same code passed live on the Replies tab on 2026-11-09.
+- A tab with no posts never reports a list. The cover stays until the 25-second timeout. The Replies tab had the same limit before.
+- The earlier entry "Show older posts is not verified on live X" is now verified on the Posts tab only. The lower row count likely came from reading only the Replies tab.
+
 # Release of X's page — 2026-11-10
 
 After the window has been closed, minimized, or hidden for 10 minutes, the app reads the editor, writes the text to disk, and frees X's page for every opened account. The next reopen loads X again and puts the text back. Attachments, polls, an unfinished sign-in, a page load, and a draft restoration keep the page loaded. A skipped release runs again 10 minutes later while the window stays out of sight.
